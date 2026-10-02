@@ -242,8 +242,8 @@ void Pc_ControlStyleUpdate(void)
      * release, so the L3+R3 flare chord does not also change the camera. */
     {
         static unsigned char s_camChord;
-        extern int Pc_AceHud_StickBindEdge(int sdlButton, int held, unsigned char* state);
-        int padEdge = Pc_AceHud_StickBindEdge(scPad[g_DebugThirdPersonCam ? 1 : 0], curPad, &s_camChord);
+        extern int Pc_FlightHud_StickBindEdge(int sdlButton, int held, unsigned char* state);
+        int padEdge = Pc_FlightHud_StickBindEdge(scPad[g_DebugThirdPersonCam ? 1 : 0], curPad, &s_camChord);
 
         if (inGameplay && ((curKey && !prevKey) || padEdge))
             Pc_ControlStyleCycle();

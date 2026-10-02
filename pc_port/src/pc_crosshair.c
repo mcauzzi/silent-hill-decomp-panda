@@ -173,9 +173,9 @@ void Pc_CrosshairDraw(void)
     }
 
     {
-        /* Red with the rest of the Ace Combat HUD while an enemy holds a lock. */
-        extern int Pc_AceHud_AlertActive(void);
-        const u_char gb = Pc_AceHud_AlertActive() ? 50 : 255;
+        /* Red with the rest of the flight HUD while an enemy holds a lock. */
+        extern int Pc_FlightHud_AlertActive(void);
+        const u_char gb = Pc_FlightHud_AlertActive() ? 50 : 255;
 
         for (i = 0; i < n; i++)
         {

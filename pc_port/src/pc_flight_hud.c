@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*
- * pc_ace_hud.c - Ace Combat style HUD (config key: ace_hud).
+ * pc_flight_hud.c - fighter-jet style HUD (config key: flight_hud).
  *
  *  - A persistent flight-style overlay: heading tape, speed and altitude tapes,
  *    boresight, target containers on enemies, radar, damage and weapon panels,
@@ -8,11 +8,11 @@
  *  - Lock warning: an enemy that keeps Harry inside its facing cone, in range,
  *    for AH_LOCK_TIME seconds has a lock. While any lock is held "MISSILE ALERT"
  *    flashes in the middle of the screen and every HUD element turns red (the
- *    crosshair and the touch overlay read Pc_AceHud_AlertActive too).
+ *    crosshair and the touch overlay read Pc_FlightHud_AlertActive too).
  *  - Flares: L3+R3 together (or the touch FLARE button) pops a salvo that breaks
  *    every lock and jams new ones for AH_JAM_TIME. Stock recharges over time.
  *
- * Logic runs from the gameplay state (Pc_AceHud_Update, game time, so a pause
+ * Logic runs from the gameplay state (Pc_FlightHud_Update, game time, so a pause
  * freezes it); drawing runs from the post-capture hook with its own GL program
  * and a full state save/restore, the same arrangement as pc_ra_toast.c. Text is
  * a built-in stroke font, so nothing is read from disk and every platform gets
@@ -36,7 +36,7 @@
 #include "pc_config.h"
 #include "pc_touch.h"
 #include "pc_quick_options.h"
-#include "pc_ace_hud.h"
+#include "pc_flight_hud.h"
 
 extern MATRIX VbWvsMatrix;
 extern long   ReadGeomScreen(void);
@@ -120,17 +120,17 @@ static float Ah_Q12f(s32 v)
     return (float)v / 4096.0f;
 }
 
-int Pc_AceHud_Enabled(void)
+int Pc_FlightHud_Enabled(void)
 {
-    return g_PcConfig.aceHud != 0;
+    return g_PcConfig.flightHud != 0;
 }
 
-int Pc_AceHud_AlertActive(void)
+int Pc_FlightHud_AlertActive(void)
 {
-    return Pc_AceHud_Enabled() && s_alert;
+    return Pc_FlightHud_Enabled() && s_alert;
 }
 
-void Pc_AceHud_FlareRequest(void)
+void Pc_FlightHud_FlareRequest(void)
 {
     s_flareReq = 1;
 }
@@ -139,19 +139,19 @@ void Pc_AceHud_FlareRequest(void)
 /* Stick-click chord guard                                             */
 /* ------------------------------------------------------------------ */
 
-int Pc_AceHud_StickBindDeferred(int sdlButton)
+int Pc_FlightHud_StickBindDeferred(int sdlButton)
 {
-    return Pc_AceHud_Enabled() &&
+    return Pc_FlightHud_Enabled() &&
            (sdlButton == SDL_CONTROLLER_BUTTON_LEFTSTICK || sdlButton == SDL_CONTROLLER_BUTTON_RIGHTSTICK);
 }
 
-int Pc_AceHud_StickBindEdge(int sdlButton, int held, unsigned char* state)
+int Pc_FlightHud_StickBindEdge(int sdlButton, int held, unsigned char* state)
 {
     const int prev  = (*state & 1) != 0;
     int       chord = (*state & 2) != 0;
     int       fire;
 
-    if (!Pc_AceHud_StickBindDeferred(sdlButton))
+    if (!Pc_FlightHud_StickBindDeferred(sdlButton))
     {
         *state = (unsigned char)(held ? 1 : 0);
         return held && !prev;
@@ -312,7 +312,7 @@ static void Ah_TryLaunch(void)
     s_flareMsgT = 1.6f;
     Ah_ResetLocks();
     SD_Call(Sfx_MenuConfirm);
-    SH_DBG("[ACEHUD] flares away, %d left", s_flareStock);
+    SH_DBG("[FLIGHTHUD] flares away, %d left", s_flareStock);
 }
 
 static void Ah_LockScan(float dt)
@@ -382,7 +382,7 @@ static void Ah_Tones(float dt)
 {
     float period;
 
-    if (!g_PcConfig.aceHudSound || (!s_anyLock && !s_anyTrack))
+    if (!g_PcConfig.flightHudSound || (!s_anyLock && !s_anyTrack))
     {
         s_beepT       = 0.0f;
         s_prevAnyLock = s_anyLock;
@@ -404,12 +404,12 @@ static void Ah_Tones(float dt)
     }
 }
 
-void Pc_AceHud_Update(void)
+void Pc_FlightHud_Update(void)
 {
     float dt;
     int   held, clicked;
 
-    if (!Pc_AceHud_Enabled())
+    if (!Pc_FlightHud_Enabled())
     {
         Ah_ResetLocks();
         s_flareReq = 0;
@@ -775,8 +775,8 @@ static const char* Ah_WeaponName(int id)
     }
 }
 
-/* Box with one end drawn as a point (dir -1 left, +1 right), the shape AC7 uses
- * for its speed and altitude readouts. */
+/* Box with one end drawn as a point (dir -1 left, +1 right), the shape used
+ * for the speed and altitude readouts. */
 static void Ah_PointerBox(float cx, float cy, float w, float h, int dir)
 {
     const float hw = w * 0.5f, hh = h * 0.5f, tip = hh * 0.8f;
@@ -899,7 +899,7 @@ static int Ah_Targets(float nowS, int* outShoot)
     return best;
 }
 
-/* AC7's radar: a dark square window, range rings, heading-up, cardinal letters
+/* Radar: a dark square window, range rings, heading-up, cardinal letters
  * riding the outer ring. */
 static void Ah_Radar(float l, float t, float w, float h, float yawTurns, float nowS)
 {
@@ -987,12 +987,12 @@ static void Ah_WeaponRow(char* name, char* value, size_t n)
         snprintf(value, n, "---");
 }
 
-/* Green, yellow, orange, red as health drops: the damage colours of AC's
- * aircraft silhouette. Keeps its own colour under a lock, or the alert would
+/* Green, yellow, orange, red as health drops: the damage colours of a
+ * jet HUD's aircraft silhouette. Keeps its own colour under a lock, or the alert would
  * hide how hurt Harry is. */
 static void Ah_HealthColor(float hp, float nowS)
 {
-    const float a = (float)g_PcConfig.aceHudOpacity / 100.0f;
+    const float a = (float)g_PcConfig.flightHudOpacity / 100.0f;
 
     if (hp >= 75.0f)      Ah_Color(0.45f, 1.0f, 0.55f, 0.95f * a);
     else if (hp >= 50.0f) Ah_Color(1.0f, 0.92f, 0.25f, 0.95f * a);
@@ -1220,7 +1220,7 @@ static GLuint Ah_Shader(GLenum type, const char* src)
     {
         char log[512];
         glGetShaderInfoLog(sh, (GLsizei)sizeof(log), NULL, log);
-        SH_DBG("[ACEHUD] shader failed: %s", log);
+        SH_DBG("[FLIGHTHUD] shader failed: %s", log);
         glDeleteShader(sh);
         return 0;
     }
@@ -1270,7 +1270,7 @@ static void Ah_GlInit(void)
     {
         char log[512];
         glGetProgramInfoLog(s_prog, (GLsizei)sizeof(log), NULL, log);
-        SH_DBG("[ACEHUD] program link failed: %s", log);
+        SH_DBG("[FLIGHTHUD] program link failed: %s", log);
         glDeleteProgram(s_prog);
         s_prog = 0;
         return;
@@ -1301,7 +1301,7 @@ static void Ah_Submit(const s_AhBatch* b)
     glDrawArrays(GL_TRIANGLES, 0, b->n);
 }
 
-void Pc_AceHud_Draw(void)
+void Pc_FlightHud_Draw(void)
 {
     GLint vp[4];
     float vpW, vpH, aspect;
@@ -1311,7 +1311,7 @@ void Pc_AceHud_Draw(void)
     GLboolean prevBlend, prevDepth, prevCull;
     int   red;
 
-    if (!Pc_AceHud_Enabled() || !Ah_InGameplay())
+    if (!Pc_FlightHud_Enabled() || !Ah_InGameplay())
         return;
     if (g_PcConsoleInputActive)
         return;
@@ -1337,7 +1337,7 @@ void Pc_AceHud_Draw(void)
 
     red = s_alert && g_SysWork.playerWork.player.health > Q12(0.0f);
     {
-        const float o = (float)g_PcConfig.aceHudOpacity / 100.0f;
+        const float o = (float)g_PcConfig.flightHudOpacity / 100.0f;
         if (red)
         {
             s_main[0] = 1.0f;  s_main[1] = 0.22f; s_main[2] = 0.16f; s_main[3] = 0.95f * o;

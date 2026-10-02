@@ -24,7 +24,7 @@ Full breakdown: [COPYRIGHT.md](COPYRIGHT.md).
 - **Controllers.** Bluetooth and USB pads work, and the touch overlay steps aside when one is in use. Remap them under **Options > Controller Config**. With more than one connected (an Android TV remote counts as one), **Options > Controller** or the quick menu's Controls page picks the one that drives the game; it is saved, and while it is disconnected every controller works as before.
 - **Graphics.** Renders at the device's native resolution in widescreen (Hor+) by default, at 60 fps. Landscape only. PGXP perspective correction and the rest of the PC port's graphics options are available too.
 - **Quick options overlay.** Graphics, HUD, audio and cheats, opened from an on-screen button.
-- **Ace Combat HUD.** A flight-style HUD in the style of Ace Combat 7 that is always on screen: time, score and target, speed and altitude readouts, a gun reticle, target boxes on enemies, a radar, and a weapon list. A silhouette of Harry shows his health, going from green to yellow, orange and red. When an enemy locks on to Harry, **MISSILE ALERT** flashes in the middle of the screen and the whole HUD turns red. Press both sticks (L3 + R3), or the **F** touch button, to fire flares, which break every lock for a few seconds. You get 4 flares, and one comes back every 10 s. Turn it off with `ace_hud = 0` in `config.cfg`.
+- **Flight HUD.** A fighter-jet style HUD that is always on screen: time, score and target, speed and altitude readouts, a gun reticle, target boxes on enemies, a radar, and a weapon list. A silhouette of Harry shows his health, going from green to yellow, orange and red. When an enemy locks on to Harry, **MISSILE ALERT** flashes in the middle of the screen and the whole HUD turns red. Press both sticks (L3 + R3), or the **F** touch button, to fire flares, which break every lock for a few seconds. You get 4 flares, and one comes back every 10 s. Turn it off with `flight_hud = 0` in `config.cfg`.
 - **RetroAchievements.** Sign in from **Options > System > Achievements** (softcore only).
 - **Mods.** Loose-file replacements and DuckStation-style texture packs. See [Modding](#modding).
 - **All regions.** USA, PAL and NTSC-J discs are auto-detected.
@@ -54,7 +54,7 @@ Game data lives in `Android/media/com.silenthill.port/` on the volume you chose.
 | Drag, right side | Look |
 | Tap | Action: attack with a weapon ready, interact otherwise |
 | On-screen buttons | Aim (hold), Item, Map, Start, and the quick options overlay |
-| **F** button | Flares (with the Ace Combat HUD on) |
+| **F** button | Flares (with the flight HUD on) |
 
 A physical controller uses the standard PSX layout.
 

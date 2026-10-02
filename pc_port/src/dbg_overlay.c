@@ -1786,14 +1786,14 @@ void DbgOverlay_Update(void)
          * level below rather than folded into curQuick. */
         padQuick = (s_padQuick >= 0) && PC_RawControllerButtonClicked(s_padQuick);
         /* On a stick click the press may be half of the L3+R3 flare chord, so
-         * it acts on release instead (pc_ace_hud.c). */
+         * it acts on release instead (pc_flight_hud.c). */
         {
             static unsigned char s_quickChord;
-            extern int Pc_AceHud_StickBindDeferred(int sdlButton);
-            extern int Pc_AceHud_StickBindEdge(int sdlButton, int held, unsigned char* state);
+            extern int Pc_FlightHud_StickBindDeferred(int sdlButton);
+            extern int Pc_FlightHud_StickBindEdge(int sdlButton, int held, unsigned char* state);
             extern int PsyX_RawControllerBindHeld(int buttonOrAxis);
-            if (Pc_AceHud_StickBindDeferred(s_padQuick))
-                padQuick = Pc_AceHud_StickBindEdge(s_padQuick, PsyX_RawControllerBindHeld(s_padQuick),
+            if (Pc_FlightHud_StickBindDeferred(s_padQuick))
+                padQuick = Pc_FlightHud_StickBindEdge(s_padQuick, PsyX_RawControllerBindHeld(s_padQuick),
                                                    &s_quickChord);
         }
         /* Not during an attract demo. The demo drives g_Controller0 with
@@ -1986,9 +1986,9 @@ void DbgOverlay_Render(void)
      * + live gameplay), independent of the debug panels below. Self-contained GL. */
     { extern void Pc_MinimapDraw(void); Pc_MinimapDraw(); }
 
-    /* Ace Combat HUD: self-contained GL with its own state save/restore, and
+    /* Flight HUD: self-contained GL with its own state save/restore, and
      * ahead of the toast so an unlock popup stays on top of it. */
-    { extern void Pc_AceHud_Draw(void); Pc_AceHud_Draw(); }
+    { extern void Pc_FlightHud_Draw(void); Pc_FlightHud_Draw(); }
 
     /* Discord Rich Presence tick: this hook runs once per EndScene, so it's the
      * port's reliable per-frame heartbeat. Self-gated (no-op unless enabled +
