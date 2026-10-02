@@ -1,163 +1,148 @@
-# Flight HUD — idee da fare
+# Flight HUD — guida e idee
 
-Backlog per l'HUD stile caccia (`flight_hud`). Ogni voce ha uno stato, cosa
-deve fare e dove metterci le mani. Aggiornare lo stato quando una voce viene
-fatta (e annotare il commit).
+L'HUD stile caccia (`flight_hud`): cosa mostra in gioco, stato delle idee,
+dove sta il codice. Aggiornare lo stato quando una voce viene provata o
+cambiata (e annotare il commit).
 
-Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
-
-Tutte le voci sono implementate e controllate nell'anteprima offline; restano
-`[~]` finché non sono provate nel gioco vero (Android o PC).
-
-## Riepilogo
-
-| # | Idea | Priorità | Stato |
-|---|------|----------|-------|
-| 1 | "DESTROYED" + "+1000" all'uccisione | Alta | [~] |
-| 2 | Messaggi radio (riquadro con nome + frase) | Media | [~] |
-| 3 | Frecce sul bordo per i nemici fuori schermo | Alta | [~] |
-| 4 | Banner "MISSION UPDATE" al cambio zona / evento | Media | [~] |
-| 5 | Terzo livello di allarme (attacco imminente) | Media | [~] |
-| 6 | Schermata di fine missione con voto | Bassa | [~] |
-| 7 | Barra salute nel riquadro del bersaglio | Media | [~] |
-| 8 | Callsign per i mostri (BANDIT, TGT-01...) | Bassa | [~] |
+Stato: `[ ]` da fare · `[~]` implementato, da provare in gioco · `[x]` provato in gioco
 
 ---
 
-## 1. "DESTROYED" + "+1000" all'uccisione
+## Cosa vedi in gioco
 
-> **Implementato.** Morte = stesso `charaId`, salute passata da > 0 a <= 0 (non si
-> guarda `collision.state`, che può cambiare prima). Entrambi gli stili; il
-> "+1000" parte sopra il DESTROYED e vola allo SCORE. Bip = `Sfx_MenuConfirm`,
-> solo con `flight_hud_sound`.
+L'HUD si vede solo mentre si gioca: sparisce in pausa, nei menu, nella mappa e
+nelle scene d'intermezzo. Si sceglie con **Flight HUD** nel menu rapido
+(pagina HUD & Audio): **Modern** (default), **Classic** o **Off**.
 
+### Sempre a schermo (stile Modern)
 
-- Quando un nemico muore: testo **DESTROYED** proiettato sopra il punto in cui
-  è morto (resta ~1,2 s), e un **+1000** che sale verso lo SCORE in alto a
-  sinistra. Bip di conferma.
-- Rilevare la morte in `Ah_LockScan` (gira ogni frame su tutti gli NPC): uno
-  slot che passava `Ah_NpcLive` e ora ha `health <= 0` con lo stesso `charaId`
-  è appena morto. Salvare posizione mondo + timestamp in una piccola coda.
-- Disegno: `Ah_Project` sulla posizione salvata, `Ah_Text` con `Ah_UseHi`.
-- Suono: un `SD_Call(Sfx_...)` del banco base (come `Sfx_MenuConfirm`/`Sfx_MenuMove` già usati).
-- Lo SCORE oggi è `(meleeKillCount + rangedKillCount) * 1000`, quindi resta coerente.
+| Dove | Cosa | Cosa significa |
+|------|------|----------------|
+| In alto a sinistra | `TIME: 00:05:55` | Tempo di gioco della partita (quello del salvataggio). |
+| | `SCORE: 1000` | 1000 punti per ogni mostro ucciso. |
+| | `TARGET: GROANER +1000` | Il mostro più vicino entro 40 m. Assente se non ce ne sono. |
+| Ai lati del centro | `SPEED` | Velocità di Harry in km/h (0 da fermo). |
+| | `ALT` | Altezza di Harry in piedi rispetto al suolo della mappa (0 al piano terra). |
+| Centro | Mirino tondo | Puramente decorativo; sparisce se miri con il crosshair attivo. |
+| | `SHOOT` | Compare sotto il mirino se stai mirando e il bersaglio più vicino è lì, entro 20 m. |
+| In basso a sinistra | Radar quadrato | Harry è il triangolo al centro, rivolto in alto. I triangoli rossi sono i mostri (fino a 25 m). N/E/S/W ruotano mentre Harry gira. |
+| In basso a destra | `> HANDGUN 12/40` | Arma in mano, colpi nel caricatore / colpi di riserva. Per le armi corpo a corpo `---`. |
+| | `FLR 4` | Flare disponibili (massimo 4). Sotto, una barretta che si riempie: dopo 10 s torna un flare. |
+| | `DMG 28%` | Danno subito: 100 meno la salute di Harry. |
+| | Sagoma di Harry | Verde (salute ≥ 75), gialla (≥ 50), arancione (≥ 25), rossa lampeggiante (sotto 25). |
 
-## 2. Messaggi radio
+Su telefono, con i controlli touch, la colonna in basso a destra diventa una
+riga in basso al centro (`DMG 74%  HANDGUN 8/0  FLR 4` con la sagoma accanto),
+perché quell'angolo è occupato dai pulsanti.
 
-> **Implementato.** Tabella `s_radioLines` (parla Cybil), coda di 3, 3,6 s a messaggio,
-> 25 s di pausa per tipo, mai la stessa frase due volte di fila. Trigger: lock,
-> uccisione, salute sotto 25, caricatore a 0, ultimo flare, nuova zona, boss.
-> Modern: in alto al centro (scende a y -172 sul touch con Quick Save/Load);
-> Classic: sotto il nastro della prua.
->
-> **Ritratti dal gioco** (`Ah_PortraitCapture`): il volto di chi parla è
-> ritagliato dall'immagine reale del frame (modello e texture del gioco)
-> proiettando la testa con `GsWSMATRIX`, in gameplay e nelle scene
-> d'intermezzo, solo se il personaggio è vicino e girato verso la camera. Il
-> mostro che fa lock ha una ripresa dal vivo; per gli altri resta il primo
-> piano migliore, salvato in `gamedata/hud_portraits/<charaId>.rgba`. Senza
-> cattura resta il busto a fil di ferro. **Da provare nel gioco vero.**
+### Sui mostri
 
+- Ogni mostro entro 40 m e inquadrato ha un **riquadrino** con `TGT` sopra e
+  la distanza in metri a destra.
+- Il più vicino ha anche un **rombo**, il **nome** (o il callsign, vedi sotto)
+  e una **barra della sua salute**.
+- Se il mostro è fuori inquadratura, una **freccia sul bordo dello schermo**
+  indica da che parte è, con la distanza.
 
-- Riquadro in alto al centro: riga 1 nome (es. "Cybil"), riga 2 la frase tra
-  `<< >>`. Dura 3–4 s, coda di massimo 2–3 messaggi, mai lo stesso due volte
-  di fila.
-- Trigger possibili: primo lock ("Harry, you've got a lock on you!"), prima
-  uccisione, salute sotto 25, caricatore a 0, flare finiti, nuovo
-  MISSION UPDATE.
-- Solo testo, niente audio (non abbiamo voci). Testi in inglese come il resto
-  dell'HUD; se serve localizzarli vedere `pc_port/src/lang_*.c`.
-- Sul touch evitare la fascia dei pulsanti Quick Save/Load (y ≈ 0.068 dell'altezza)
-  se `touch_quicksave_buttons` è attivo.
+### Quando un mostro ti punta
 
-## 3. Frecce per i nemici fuori schermo
+1. Un mostro entro 12 m che guarda verso Harry inizia a "puntarlo": compare
+   **WARNING** al centro, il suo riquadro lampeggia, bip lenti.
+2. Se continua a guardarlo per quasi un secondo **ha fatto lock**: lampeggia
+   **MISSILE ALERT**, **tutto l'HUD diventa rosso** (anche crosshair e
+   pulsanti touch), bip veloci, e Cybil avvisa via radio. Il mostro sul radar e
+   nel riquadro diventa `LOCK`.
+3. Se chi ha fatto lock è a meno di 2,5 m compare anche **EVADE**, i bordi
+   dello schermo pulsano di rosso e i bip diventano continui.
 
-> **Implementato.** `Ah_OffscreenArrows`, entrambi gli stili. Margine 20 unità.
+La sagoma di Harry resta del colore della sua salute anche quando tutto il
+resto è rosso.
 
+### Flare
 
-- Per ogni nemico vivo entro `AH_TARGET_RANGE` che `Ah_Project` scarta (dietro
-  la camera o fuori dai bordi): triangolino sul bordo dell'area HUD nella
-  direzione del nemico, con la distanza accanto.
-- Dietro la camera: usare la direzione in view-space (vx, vy) invertita, e
-  agganciare la freccia al bordo con un clamp su un rettangolo con margine
-  (~20 unità HUD).
-- Colore `Ah_UseHi` lampeggiante se quel nemico sta facendo lock (`s_lockState`).
-- Utile soprattutto con le camere fisse, dove i mostri sono spesso fuori inquadratura.
+- **L3 + R3 insieme** (i due stick premuti), o il pulsante **F** sul touch.
+- Partono scie luminose dietro Harry, compare **FLARE**, e ogni lock si rompe:
+  per 3 secondi nessun mostro può agganciarti di nuovo.
+- Se non ne hai compare **NO FLARES**.
+- Con l'HUD attivo, un click singolo su L3 (menu rapido) o R3 (cambio camera)
+  funziona al rilascio del tasto, così la combinazione dei flare non li attiva.
 
-## 4. Banner "MISSION UPDATE"
+### Eventi
 
-> **Implementato.** Tabelle `s_zoneNames` / `s_mapZone` (le mappe senza nome noto
-> danno -1 e niente banner). La zona in cui si carica la partita non viene
-> annunciata. Se c'è un debriefing a schermo il banner aspetta. Posizione
-> y +104, sotto il centro, in entrambi gli stili.
+| Cosa | Quando |
+|------|--------|
+| **DESTROYED** sul mostro e **+1000** che vola verso lo SCORE | Ogni uccisione. |
+| **Radio** in alto al centro: nome di chi parla, frase tra `<< >>`, ritratto a destra | Cybil parla al primo lock, a un'uccisione, con salute sotto 25, a caricatore vuoto, all'ultimo flare, in una zona nuova, a boss sconfitto. A volte, prima di lei, parla in rosso il mostro che ti ha agganciato ("RAWR!", "SKREEEE!"). Ogni messaggio resta circa 3,5 s. |
+| **MISSION UPDATE** con il nome della zona | La prima volta che entri in una zona durante la sessione (non quella in cui carichi la partita). |
+| **MISSION COMPLETE** | Dopo un boss, o la prima volta che entri in un nuovo capitolo: tempo, punteggio, uccisioni, colpi sparati / a segno, precisione e voto S/A/B/C. Resta 7 s e non blocca il gioco. Non compare se nel tratto non hai combattuto. |
 
+### Ritratto della radio
 
-- Banner centrale con due righe: "MISSION UPDATE" + nome zona (es. "OLD SILENT
-  HILL", "MIDWICH ELEMENTARY SCHOOL"). Entra/esce con una linea che si allarga.
-- Trigger: cambio di `g_SavegamePtr->mapIdx` (o del mapOverlay caricato) mentre
-  si è in gameplay. Serve una tabella mapIdx → nome zona.
-- Mostrare una volta per zona per sessione, non a ogni porta.
+- Il ritratto è il **volto vero del personaggio**, ritagliato dall'immagine del
+  gioco, con scanline e una tinta del colore dell'HUD.
+- Il volto viene "fotografato" quando il personaggio è vicino, inquadrato e
+  girato verso la camera, anche durante le scene d'intermezzo. Il primo piano
+  di Cybil si prende nella scena iniziale del bar.
+- Il mostro che ti aggancia appare **in diretta** se è inquadrato; altrimenti
+  si vede il suo miglior primo piano già catturato.
+- I primi piani si salvano in `gamedata/hud_portraits/` e restano dopo il
+  riavvio.
+- Finché non c'è un primo piano si vede un **busto stilizzato a fil di ferro**.
 
-## 5. Terzo livello di allarme
+### Stile Classic
 
-> **Implementato.** Lock da meno di 2,5 m (`AH_DANGER_RANGE`): bip ogni 0,08 s,
-> "EVADE" sotto MISSILE ALERT, bordo rosso pulsante (`Ah_DangerEdge`).
-> "Sta attaccando" non è rilevato: la distanza basta e vale per ogni mostro.
+Stesse funzioni con un altro aspetto: nastro della bussola in alto, nastri
+scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
+`DMG` con barra della salute in basso a sinistra, niente sagoma.
 
+### Opzioni
 
-- Oggi: WARNING (un nemico ti sta puntando) → MISSILE ALERT (lock fatto).
-- Aggiungere un livello quando un nemico con lock è anche molto vicino (< 2–3 m)
-  o sta attaccando: bip continui più veloci, bordo dello schermo che pulsa
-  rosso (quad semitrasparenti nel batch `s_fill`).
-- Non disegnare il bordo pulsante se `low_health_glow` è già attivo e sta
-  pulsando, per non sommare due effetti rossi.
+| Opzione (`config.cfg`) | Valori |
+|------------------------|--------|
+| `flight_hud` | 0 off, 1 Modern (default), 2 Classic. Anche nel menu rapido e nelle Opzioni. |
+| `flight_hud_sound` | 1 bip di allarme (default), 0 silenzio. |
+| `flight_hud_opacity` | 10–100, trasparenza dell'HUD. |
+| `flight_hud_callsigns` | 0 nomi dei mostri (default), 1 BOGEY / BANDIT (BANDIT se ti sta puntando), 2 TGT-01, TGT-02… Nelle Opzioni solo su telefono ("Target_Labels"). |
 
-## 6. Schermata di fine missione
+---
 
-> **Implementato.** "Missione" = da un debriefing al successivo. Si chiude alla
-> morte di un boss (Split Head, Floatstinger, Twinfeeler, Bloodsucker,
-> Incubus, Cybil mostro) o al primo ingresso nella sessione in un nuovo
-> capitolo (`MAPn` della mappa; l'ordine non è crescente: la città è MAP2, la
-> scuola MAP1). Un tratto senza uccisioni né colpi sparati (la passeggiata
-> iniziale) non ha debriefing. Pannello di 7 s, non blocca l'input. Voto:
-> precisione fino a 60 punti (45 se non si spara) + 4 per uccisione fino a 40;
-> S >= 85, A >= 70, B >= 50, altrimenti C. Un caricamento si riconosce dai
-> contatori che tornano indietro e fa ripartire le statistiche.
+## Stato
 
+| # | Voce | Stato |
+|---|------|-------|
+| — | HUD base (Modern + Classic), lock, MISSILE ALERT, flare, radar su touch | [x] HUD base visto su Android; lock e flare da provare |
+| 1 | DESTROYED + "+1000" | [~] |
+| 2 | Messaggi radio | [~] |
+| 2b | Ritratti presi dal gioco | [~] mai visti in gioco: priorità del prossimo test |
+| 3 | Frecce sul bordo | [~] |
+| 4 | MISSION UPDATE | [~] |
+| 5 | Terzo allarme (EVADE) | [~] |
+| 6 | MISSION COMPLETE | [~] |
+| 7 | Barra salute del bersaglio | [~] |
+| 8 | Callsign | [~] |
 
-- Dopo un boss o un cambio di capitolo: pannello con TIME, SCORE, nemici
-  abbattuti, colpi sparati / a segno, voto (S/A/B/C).
-- Dati già disponibili in `s_Savegame`: `gameplayTimer`, `meleeKillCount`,
-  `rangedKillCount`, `firedShotCount`, `closeRangeShotCount`,
-  `midRangeShotCount`, `longRangeShotCount`.
-- Serve definire cosa è una "missione": probabilmente il passaggio tra mappe
-  principali o la morte di un boss (individuare i flag evento).
-- È la voce più grande: valutare se farla come overlay temporaneo (non deve
-  bloccare l'input del gioco).
+### Da provare in gioco
 
-## 7. Barra salute nel riquadro del bersaglio
+- [ ] Bar iniziale: Cybil viene catturata? Il ritaglio è centrato sul volto?
+- [ ] Primo mostro (Air Screamer nel bar): riquadro, nome, barra salute, frecce quando esce di scena.
+- [ ] Lock: WARNING → MISSILE ALERT → tutto rosso, voce radio di Cybil con il suo ritratto.
+- [ ] Mostro che fa lock da vicino: EVADE e bordi rossi; ritratto in diretta del mostro.
+- [ ] Flare (L3+R3 o F): lock rotto, FLR che scende e si ricarica.
+- [ ] Uccisione: DESTROYED, +1000, SCORE che sale.
+- [ ] Uscita dal bar verso la città: MISSION UPDATE.
+- [ ] Fine di un capitolo o un boss: MISSION COMPLETE con voto.
 
-> **Implementato.** Modern: sotto il rombo del bersaglio più vicino. Classic: sotto
-> il riquadro del più vicino, la distanza scende di una riga.
+Se un elemento è nel posto sbagliato o non si capisce, annotarlo qui con uno
+screenshot.
 
+---
 
-- Sotto il riquadro del bersaglio principale (`best` in `Ah_Targets`): barra
-  sottile con la salute residua del mostro.
-- La salute massima cambia per mostro e difficoltà: memorizzare la salute più
-  alta vista per quello slot NPC (finché `charaId` non cambia) e usarla come
-  100%.
+## Idee future
 
-## 8. Callsign per i mostri
-
-> **Implementato.** `flight_hud_callsigns`: 0 nomi, 1 BOGEY / BANDIT (BANDIT quando
-> ti sta puntando), 2 TGT-nn per slot. Nelle Opzioni solo sul telefono
-> ("Target_Labels", pagina PCOPT_M); sul desktop la pagina HUD è piena, quindi
-> solo da config.
-
-
-- Opzione per sostituire "GROANER", "AIR SCREAMER"... con nomi in codice:
-  "BANDIT", "BOGEY", oppure "TGT-01", "TGT-02" per slot.
-- Facile: `Ah_EnemyName` + una nuova voce di config (es. `flight_hud_callsigns`).
+- Riquadro radio con un'animazione d'apertura più lunga e audio di statico.
+- Indicatore di direzione verso l'obiettivo della zona (porta/chiave), se si
+  riesce a leggerlo dai flag evento.
+- Testi dell'HUD tradotti (oggi solo inglese).
 
 ---
 
@@ -165,8 +150,9 @@ Tutte le voci sono implementate e controllate nell'anteprima offline; restano
 
 - `pc_port/src/pc_flight_hud.c` — tutto l'HUD.
   - Logica (thread di gioco, tempo di gioco): `Pc_FlightHud_Update` →
-    `Ah_FlareSim`, `Ah_LockScan`, `Ah_Tones`. Agganciato in
-    `src/bodyprog/events/game_sys_states.c` accanto a `Pc_CrosshairDraw`.
+    `Ah_FlareSim`, `Ah_LockScan`, `Ah_Tones`, radio, uccisioni, banner,
+    debriefing. Agganciato in `src/bodyprog/events/game_sys_states.c` accanto a
+    `Pc_CrosshairDraw`.
   - Disegno: `Pc_FlightHud_Draw`, chiamato da `DbgOverlay_Render`
     (`pc_port/src/dbg_overlay.c`) dopo la cattura del frame. GL proprio, con
     salvataggio/ripristino dello stato.
@@ -179,10 +165,15 @@ Tutte le voci sono implementate e controllate nell'anteprima offline; restano
     pochi simboli: aggiungere glifi lì se servono).
   - Proiezione mondo → HUD: `Ah_Project` (metri, assi di gioco, Y verso il basso).
   - Stili: Modern = `Ah_BuildHud`, Classic = `Ah_BuildHudClassic`.
-    Ogni idea va decisa per entrambi, o solo per Modern.
   - Layout touch: ramo `touch` (`Pc_Touch_IsDrivingInput()`) in entrambi i build.
-- Config: `flight_hud` (0 off / 1 modern / 2 classic), `flight_hud_sound`,
-  `flight_hud_opacity`, `flight_hud_callsigns` — `pc_port/src/pc_config.c`, `pc_port/include/pc_config.h`,
+  - Ritratti: `Ah_PortraitCapture` proietta la testa con `GsWSMATRIX` (la
+    matrice con cui è stato disegnato il frame, quindi vale anche nelle scene
+    d'intermezzo), ritaglia il frame con `glBlitFramebuffer` da
+    `GR_ScreenReadFBO()` in una texture 128×128 per `charaId`; salvataggio in
+    `gamedata/hud_portraits/<charaId>.rgba`. Disegno con `Ah_PortraitDraw`;
+    `Ah_Portrait` è il ripiego a fil di ferro.
+- Config: `flight_hud`, `flight_hud_sound`, `flight_hud_opacity`,
+  `flight_hud_callsigns` — `pc_port/src/pc_config.c`, `pc_port/include/pc_config.h`,
   documentati in `pc_port/config.cfg`. Riga "Flight HUD" in
   `src/screens/options/options.c` e nel menu rapido (`pc_port/src/pc_quick_options.c`).
   Le pagine Opzioni hanno un tetto di righe: la pagina HUD del telefono è piena.
@@ -191,8 +182,9 @@ Tutte le voci sono implementate e controllate nell'anteprima offline; restano
 ## Anteprima senza il gioco
 
 `pc_port/tools/flight_hud_preview/` contiene un harness che include
-`pc_flight_hud.c`, finge una scena (Harry, tre o quattro nemici, flare) e
-scrive i triangoli dell'HUD; `render.py` li rasterizza in PNG.
+`pc_flight_hud.c`, finge una scena (Harry, alcuni nemici, flare) e scrive i
+triangoli dell'HUD; `render.py` li rasterizza in PNG. I ritratti presi dal
+gioco non si vedono qui (servono GL e il frame vero): compare il fil di ferro.
 
 ```
 # dalla cartella pc_port/tools/flight_hud_preview, con una build CMake in <build>
@@ -203,6 +195,6 @@ $CMD -Wno-unused-label -o harness harness.c -lSDL2 -lm -Wl,--unresolved-symbols=
 ```
 
 Produce `normal.png`, `alert.png`, `flare.png`, `aim.png`, `classic.png`,
-`touch.png`, `events.png` / `events_classic.png` (uccisione, radio, frecce,
-callsign numerati), `danger.png` (terzo allarme), `banner.png`, `debrief.png`. Lo sfondo è finto: serve solo a controllare layout e colori.
-Prima di chiudere una voce, provarla comunque nel gioco vero (Android o PC).
+`touch.png`, `events.png` / `events_classic.png`, `danger.png`, `banner.png`,
+`debrief.png`, `comm_*.png`. Lo sfondo è finto: serve solo a controllare
+layout e colori.
