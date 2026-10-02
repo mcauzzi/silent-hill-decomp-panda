@@ -28,7 +28,7 @@
 #include "bodyprog/events/map_msg.h" /* g_MapMsg_Select */
 #include "pc_quick_options.h"     /* the button below opens it */
 #include "control_style.h"
-#include "pc_ace_hud.h"
+#include "pc_flight_hud.h"
 
 #define TC_MAX_FINGERS 8
 
@@ -108,7 +108,7 @@ static s_TouchButton s_Buttons[TB_COUNT] = {
      * of Menu, Pause and View -- a shade larger, so the letter clears the ring. */
     [TB_QSAVE] = { 0.245f, 0.068f, 0.060f, 0 },
     [TB_QLOAD] = { 0.745f, 0.068f, 0.060f, 0 },
-    /* Flares, only with the Ace Combat HUD on. Above Light, left of Map: the
+    /* Flares, only with the flight HUD on. Above Light, left of Map: the
      * one gap in the right-hand cluster a thumb reaches without leaving it. */
     [TB_FLARE] = { 0.760f, 0.470f, 0.058f, 0 },
 };
@@ -636,7 +636,7 @@ static int Tg_HitCtl(float hx, float hy)
     {
         if ((i == TG_C_QSAVE || i == TG_C_QLOAD) && !Tc_QuickButtonsOn())
             continue;
-        if (i == TG_C_FLARE && !Pc_AceHud_Enabled())
+        if (i == TG_C_FLARE && !Pc_FlightHud_Enabled())
             continue;
 
         float dx = hx - s_TgCtls[i].cx;
@@ -815,7 +815,7 @@ static int Tc_HitButton(float x, float y, float aspect)
             continue;
         if ((i == TB_QSAVE || i == TB_QLOAD) && !Tc_QuickButtonsOn())
             continue;
-        if (i == TB_FLARE && !Pc_AceHud_Enabled())
+        if (i == TB_FLARE && !Pc_FlightHud_Enabled())
             continue;
 
         float dx = (x - s_Buttons[i].cx) * aspect;
@@ -1556,12 +1556,12 @@ void Pc_Touch_Update(void)
          * Menu. */
         {
             static int s_flareWas;
-            const int  flareNow = (mode == TC_MODE_GAMEPLAY) && Pc_AceHud_Enabled() &&
+            const int  flareNow = (mode == TC_MODE_GAMEPLAY) && Pc_FlightHud_Enabled() &&
                                   (Tc_GamepadStyle() ? s_TgHeld[TG_C_FLARE]
                                                      : (s_Buttons[TB_FLARE].holdFrames > 0));
 
             if (flareNow && !s_flareWas)
-                Pc_AceHud_FlareRequest();
+                Pc_FlightHud_FlareRequest();
             s_flareWas = flareNow;
         }
         /* The raw L2 bit, which is exactly what the Gamepad style's second
@@ -2034,7 +2034,7 @@ void Pc_Touch_Draw(void)
 
             if (c == TG_C_FLARE)
             {
-                if (Pc_AceHud_Enabled())
+                if (Pc_FlightHud_Enabled())
                     Tc_LetterButton(&batch, "F", bx, by, TC_UR(s_TgCtls[c].hw), lum);
                 continue;
             }
@@ -2196,7 +2196,7 @@ void Pc_Touch_Draw(void)
             (mode != TC_MODE_GAMEPLAY || !Tc_QuickButtonsOn()))
             continue;
 
-        if (i == TB_FLARE && (mode != TC_MODE_GAMEPLAY || !Pc_AceHud_Enabled()))
+        if (i == TB_FLARE && (mode != TC_MODE_GAMEPLAY || !Pc_FlightHud_Enabled()))
             continue;
 
         /* Fire appears with the gun and goes away with it. */
@@ -2388,7 +2388,7 @@ void Pc_Touch_Draw(void)
         ot = &g_OtTags0[buf][4];
 
     /* The controls are HUD too: red with the rest of it under a lock. */
-    if (mode == TC_MODE_GAMEPLAY && Pc_AceHud_AlertActive())
+    if (mode == TC_MODE_GAMEPLAY && Pc_FlightHud_AlertActive())
     {
         for (i = 0; i < batch.used; i++)
         {

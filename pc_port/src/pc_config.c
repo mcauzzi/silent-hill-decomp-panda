@@ -106,9 +106,9 @@ s_PcConfig g_PcConfig = {
     .crosshair           = 0, /* draw a center crosshair while aiming in TPS/OTS */
     .crosshairStyle      = 0, /* 0 = cross (+), 1 = dot, 2 = circle, 3 = dashes/gap */
     .crosshairSize       = 100.0f,
-    .aceHud              = 1,
-    .aceHudSound         = 1,
-    .aceHudOpacity       = 100,
+    .flightHud              = 1,
+    .flightHudSound         = 1,
+    .flightHudOpacity       = 100,
     .aimAssist           = 1, /* OTS/TPS free-aim aim assist (mouse body-coverage + controller auto-aim) */
     .mouseCursor         = 1, /* mouse controls cursor puzzles + clickable main menu */
 #if defined(__ANDROID__) || defined(SH_IOS)
@@ -1037,20 +1037,20 @@ void PcConfig_Load(const char* path)
             if (v > 125.0f) v = 125.0f;
             g_PcConfig.crosshairSize = v;
         }
-        else if (strcmp(key, "ace_hud") == 0)
+        else if (strcmp(key, "flight_hud") == 0)
         {
-            g_PcConfig.aceHud = (atoi(value) != 0);
+            g_PcConfig.flightHud = (atoi(value) != 0);
         }
-        else if (strcmp(key, "ace_hud_sound") == 0)
+        else if (strcmp(key, "flight_hud_sound") == 0)
         {
-            g_PcConfig.aceHudSound = (atoi(value) != 0);
+            g_PcConfig.flightHudSound = (atoi(value) != 0);
         }
-        else if (strcmp(key, "ace_hud_opacity") == 0)
+        else if (strcmp(key, "flight_hud_opacity") == 0)
         {
             int v = atoi(value);
             if (v < 10)  v = 10;
             if (v > 100) v = 100;
-            g_PcConfig.aceHudOpacity = v;
+            g_PcConfig.flightHudOpacity = v;
         }
         else if (strcmp(key, "mouse_cursor") == 0)
         {
