@@ -74,6 +74,21 @@ jobs:
           # action does not know, and they fail the job before anything builds.
           validate-wrappers: false
 
+      # A fixed signing key, so each APK installs over the last one. Without
+      # the secret the runner makes a fresh debug key every run, and Android
+      # refuses to update an app signed with a different key.
+      - name: Fixed debug signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            mkdir -p "$HOME/.android"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+            echo "Using the fixed debug key from secrets"
+          else
+            echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 not set: the APK gets a throwaway key and will not install over a previous build"
+          fi
+
       - name: Build
         env:
           JAVA_HOME_ANDROID: ${{ env.JAVA_HOME }}
