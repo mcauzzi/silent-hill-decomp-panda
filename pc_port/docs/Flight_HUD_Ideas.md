@@ -159,6 +159,58 @@ screenshot.
 
 ---
 
+## Idee di gameplay
+
+Oggi l'HUD è solo scena: il lock, l'allarme e i flare non cambiano nulla del
+gioco. Queste idee lo cambierebbero davvero. Tutto va dietro un'opzione
+(`flight_gameplay`, spenta di default), così il gioco base resta identico
+all'originale PSX.
+
+### Livelli di difficoltà del lavoro
+
+| Livello | Cosa | Fattibilità |
+|---------|------|-------------|
+| 1 | I flare hanno un effetto vero: per qualche secondo i mostri perdono Harry (attacco annullato o rimandato) | Facile: tocca solo l'IA al momento dell'attacco |
+| 2 | Missili "arcade" dei mostri: dopo MISSILE ALERT parte un proiettile che insegue Harry; i flare lo deviano, se colpisce fa il danno dell'attacco normale | Medio: un nuovo oggetto con la sua fisica, danno tramite le funzioni già esistenti |
+| 3 | Missili di Harry: con un bersaglio agganciato, un tasto lancia un missile a ricerca (munizioni contate, si ricaricano come i flare) | Medio: stessa base del livello 2, colpisce con il danno delle armi da fuoco |
+| 4 | Harry e i mostri che si muovono come aerei (volo, quota, virate) | Molto difficile: va riscritto il movimento di tutti i personaggi, le collisioni e le telecamere. Sconsigliato |
+
+Consigliato: partire da 1, poi 2 e 3 insieme ("modalità arcade").
+
+### Missili arcade (livelli 2–3)
+
+- Guida semplice: il missile ruota verso il bersaglio con una velocità di
+  virata limitata, così si può schivare correndo di lato.
+- Durata massima di qualche secondo, poi esplode da solo.
+- I flare attivi attirano i missili vicini invece del bersaglio.
+- Il danno passa per le funzioni di danno del gioco, così animazioni di
+  colpo e morte restano quelle originali.
+- Suoni: riusare effetti già presenti (sparo, esplosione) invece di audio nuovo.
+- HUD: il missile in arrivo ha il suo indicatore (rombo rosso che lampeggia
+  più veloce man mano che si avvicina); il riquadro del bersaglio mostra
+  i missili di Harry rimasti (MSL accanto a FLR).
+
+### Scie dei missili
+
+Rendering ibrido:
+
+- **Fumo**: primitive PSX normali nella OT del mondo (OT0), quindi con la
+  profondità giusta, nascosto dai muri e coperto dalla nebbia come il resto
+  della scena. Una fila di quad semitrasparenti che sbiadiscono e si
+  allargano col tempo.
+- **Bagliore**: nello strato HUD, in additivo (come i flare), solo sulla testa
+  del missile. È quello che lo rende leggibile da lontano.
+
+### Livelli nuovi
+
+- La pipeline TrenchBroom esistente permette di creare mappe, una alla volta.
+- Idea: una piccola arena per provare la modalità arcade (spazio aperto,
+  qualche ostacolo, ondate di mostri).
+- Le stesse mappe nascoste possono servire da "scena" per altre cose
+  (es. il ritratto radio, se un giorno servisse un fondale).
+
+---
+
 ## Dove sta il codice
 
 - `pc_port/src/pc_flight_hud.c` — tutto l'HUD.
