@@ -12,6 +12,7 @@ s_ControllerData* const g_Controller0 = &s_c0;
 q19_12 g_DeltaTime = Q12(1.0f / 30.0f);
 s_PcConfig g_PcConfig;
 MATRIX VbWvsMatrix;
+MATRIX GsWSMATRIX;
 int g_PcConsoleInputActive, g_PcQuickOptionsActive;
 static int s_touch;
 long ReadGeomScreen(void) { return 256; }
@@ -56,7 +57,7 @@ static void say(int face, int chara)
 static void frame(float aspect, const char* path, int alert)
 {
     int k;
-    s_w2 = 240.0f * aspect; s_kx = 2.0f; s_ky = 240.0f / 112.0f; s_camH = 256; vcGetNowCamPos(&s_cam);
+    s_w2 = 240.0f * aspect; s_kx = 2.0f; s_ky = 240.0f / 112.0f; s_camH = 256;
     red_setup:
     {
         const float o = 1.0f;
@@ -80,6 +81,8 @@ int main(int argc, char** argv)
     g_GameWork.gameState = GameState_InGame;
     g_SysWork.sysState = SysState_Gameplay;
     VbWvsMatrix.m[0][0] = VbWvsMatrix.m[1][1] = VbWvsMatrix.m[2][2] = 4096;
+    GsWSMATRIX = VbWvsMatrix;
+    GsWSMATRIX.t[1] = (int)(1.7f * 256); GsWSMATRIX.t[2] = 4 * 256;
     g_SysWork.playerWork.player.health = Q12(72.0f);
     g_SysWork.playerWork.player.moveSpeed = Q12(4.2f);
     g_SysWork.playerWork.player.rotation.vy = (q3_12)(12.0f / 360.0f * 4096);
