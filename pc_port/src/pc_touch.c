@@ -28,6 +28,7 @@
 #include "bodyprog/events/map_msg.h" /* g_MapMsg_Select */
 #include "pc_quick_options.h"     /* the button below opens it */
 #include "control_style.h"
+#include "pc_ace_hud.h"
 
 #define TC_MAX_FINGERS 8
 
@@ -40,7 +41,7 @@ enum { TR_NONE = 0, TR_MOVE, TR_LOOK, TR_BUTTON, TR_ADVANCE,
 /* Actions the on-screen buttons drive. Indices into s_Buttons. */
 enum { TB_AIM = 0, TB_ITEM, TB_MAP, TB_START, TB_RUN, TB_BACK, TB_FIRE, TB_MENU,
        TB_SKIP,
-       TB_LIGHT, TB_VIEW, TB_CAM, TB_QSAVE, TB_QLOAD, TB_COUNT };
+       TB_LIGHT, TB_VIEW, TB_CAM, TB_QSAVE, TB_QLOAD, TB_FLARE, TB_COUNT };
 
 typedef struct
 {
@@ -107,6 +108,9 @@ static s_TouchButton s_Buttons[TB_COUNT] = {
      * of Menu, Pause and View -- a shade larger, so the letter clears the ring. */
     [TB_QSAVE] = { 0.245f, 0.068f, 0.060f, 0 },
     [TB_QLOAD] = { 0.745f, 0.068f, 0.060f, 0 },
+    /* Flares, only with the Ace Combat HUD on. Above Light, left of Map: the
+     * one gap in the right-hand cluster a thumb reaches without leaving it. */
+    [TB_FLARE] = { 0.760f, 0.470f, 0.058f, 0 },
 };
 
 typedef struct
@@ -514,7 +518,7 @@ typedef struct
 
 enum { TG_C_TRIANGLE = 0, TG_C_CIRCLE, TG_C_CROSS, TG_C_SQUARE,
        TG_C_L1, TG_C_L2, TG_C_START, TG_C_MENU, TG_C_SELECT, TG_C_R2, TG_C_R1,
-       TG_C_QSAVE, TG_C_QLOAD, TG_C_CAM,
+       TG_C_QSAVE, TG_C_QLOAD, TG_C_CAM, TG_C_FLARE,
        TG_C_COUNT };
 
 /* Camera style: round, under Menu at the top centre. */
@@ -608,6 +612,10 @@ static void Tg_Layout(float aspectW)
     }
     s_TgCtls[TG_C_R2]     = (s_TgCtl){ aspectW - 0.34f,   0.08f, TG_SHLD_W, TG_SHLD_H, 0, TG_R2 };
     s_TgCtls[TG_C_R1]     = (s_TgCtl){ aspectW - 0.14f,   0.08f, TG_SHLD_W, TG_SHLD_H, 0, TG_R1 };
+    /* Up and right of the face diamond, clear of Triangle's and Circle's
+     * touch areas. */
+    s_TgCtls[TG_C_FLARE]  = (s_TgCtl){ rx + TG_BTN_D + 0.02f, TG_BTN_CY - TG_BTN_D - 0.06f,
+                                       TG_CAM_R, TG_CAM_R, 1, TG_NOBIT };
 
     for (i = 0; i < TG_C_COUNT; i++)
         s_TgHeld[i] = 0;
@@ -627,6 +635,8 @@ static int Tg_HitCtl(float hx, float hy)
     for (i = 0; i < TG_C_COUNT; i++)
     {
         if ((i == TG_C_QSAVE || i == TG_C_QLOAD) && !Tc_QuickButtonsOn())
+            continue;
+        if (i == TG_C_FLARE && !Pc_AceHud_Enabled())
             continue;
 
         float dx = hx - s_TgCtls[i].cx;
@@ -804,6 +814,8 @@ static int Tc_HitButton(float x, float y, float aspect)
         if (Tc_CornerOnly(i))
             continue;
         if ((i == TB_QSAVE || i == TB_QLOAD) && !Tc_QuickButtonsOn())
+            continue;
+        if (i == TB_FLARE && !Pc_AceHud_Enabled())
             continue;
 
         float dx = (x - s_Buttons[i].cx) * aspect;
@@ -1538,6 +1550,20 @@ void Pc_Touch_Update(void)
             }
         }
         if (s_Buttons[TB_LIGHT].holdFrames > 0) Tc_PressAction(&s_PadWord, cfg->light);
+
+        /* No PSX button behind it (the pad's chord is L3+R3, which a touch pad
+         * has no sticks to click), so a direct request, edge-triggered like
+         * Menu. */
+        {
+            static int s_flareWas;
+            const int  flareNow = (mode == TC_MODE_GAMEPLAY) && Pc_AceHud_Enabled() &&
+                                  (Tc_GamepadStyle() ? s_TgHeld[TG_C_FLARE]
+                                                     : (s_Buttons[TB_FLARE].holdFrames > 0));
+
+            if (flareNow && !s_flareWas)
+                Pc_AceHud_FlareRequest();
+            s_flareWas = flareNow;
+        }
         /* The raw L2 bit, which is exactly what the Gamepad style's second
          * shoulder control sends -- not controllerConfig.view. Going through
          * the bind let the two styles disagree: control type 2 moves `view` to
@@ -1752,6 +1778,7 @@ static const s_TcGlyph s_TcFont[] = {
     { 'T', { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 } },
     { 'A', { 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 } },
     { 'E', { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F } },
+    { 'F', { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10 } },
     { 'C', { 0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E } },
     { '1', { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E } },
     { '2', { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F } },
@@ -1897,8 +1924,8 @@ static void Tc_Eye(s_TcBatch* b, int cx, int cy, int r, int lum)
     Tc_Octagon(b, cx, cy, (r * 17) / 100, lum);
 }
 
-/* A quick save/load button: a ring with its letter. */
-static void Tc_QuickButton(s_TcBatch* b, int load, int cx, int cy, int r, int lum)
+/* A ring with a letter, as the quick save/load buttons. */
+static void Tc_LetterButton(s_TcBatch* b, const char* letter, int cx, int cy, int r, int lum)
 {
     int px;
     int inner = (r * 80) / 100;
@@ -1909,7 +1936,12 @@ static void Tc_QuickButton(s_TcBatch* b, int load, int cx, int cy, int r, int lu
     px = ((inner * 2 * 80) / 100) / TC_GLYPH_H;
     if (px < 1)
         px = 1;
-    Tc_Text(b, load ? "L" : "S", cx, cy, px, lum);
+    Tc_Text(b, letter, cx, cy, px, lum);
+}
+
+static void Tc_QuickButton(s_TcBatch* b, int load, int cx, int cy, int r, int lum)
+{
+    Tc_LetterButton(b, load ? "L" : "S", cx, cy, r, lum);
 }
 
 void Pc_Touch_Draw(void)
@@ -1997,6 +2029,13 @@ void Pc_Touch_Draw(void)
                 if (Tc_QuickButtonsOn())
                     Tc_QuickButton(&batch, c == TG_C_QLOAD, bx, by,
                                    TC_UR(s_TgCtls[c].hw), lum);
+                continue;
+            }
+
+            if (c == TG_C_FLARE)
+            {
+                if (Pc_AceHud_Enabled())
+                    Tc_LetterButton(&batch, "F", bx, by, TC_UR(s_TgCtls[c].hw), lum);
                 continue;
             }
 
@@ -2157,6 +2196,9 @@ void Pc_Touch_Draw(void)
             (mode != TC_MODE_GAMEPLAY || !Tc_QuickButtonsOn()))
             continue;
 
+        if (i == TB_FLARE && (mode != TC_MODE_GAMEPLAY || !Pc_AceHud_Enabled()))
+            continue;
+
         /* Fire appears with the gun and goes away with it. */
         if (i == TB_FIRE &&
             (mode != TC_MODE_GAMEPLAY || g_PcConfig.oneButtonCombat ||
@@ -2184,6 +2226,12 @@ void Pc_Touch_Draw(void)
         if (i == TB_QSAVE || i == TB_QLOAD)
         {
             Tc_QuickButton(&batch, i == TB_QLOAD, cx, cy, r, lum);
+            continue;
+        }
+
+        if (i == TB_FLARE)
+        {
+            Tc_LetterButton(&batch, "F", cx, cy, r, lum);
             continue;
         }
 
@@ -2338,6 +2386,19 @@ void Pc_Touch_Draw(void)
         ot = &g_OtTags0[buf][15];
     else
         ot = &g_OtTags0[buf][4];
+
+    /* The controls are HUD too: red with the rest of it under a lock. */
+    if (mode == TC_MODE_GAMEPLAY && Pc_AceHud_AlertActive())
+    {
+        for (i = 0; i < batch.used; i++)
+        {
+            POLY_G4* q = &batch.p[i];
+            q->g0 = (u_char)(q->g0 / 5); q->g1 = (u_char)(q->g1 / 5);
+            q->g2 = (u_char)(q->g2 / 5); q->g3 = (u_char)(q->g3 / 5);
+            q->b0 = (u_char)(q->b0 / 5); q->b1 = (u_char)(q->b1 / 5);
+            q->b2 = (u_char)(q->b2 / 5); q->b3 = (u_char)(q->b3 / 5);
+        }
+    }
 
     for (i = 0; i < batch.used; i++)
         AddPrim(ot, &batch.p[i]);
