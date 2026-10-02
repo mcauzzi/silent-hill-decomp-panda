@@ -153,6 +153,10 @@ static const QoRowDef s_page1[] = {
     { ROW_OPT,   "crosshair_size",       0, NULL },
     { ROW_OPT,   "low_health_glow",      0, NULL },
     { ROW_OPT,   "flight_hud",           0, NULL },
+#if defined(QO_MOBILE)
+    /* Its Options row lives on the phone-only overflow page. */
+    { ROW_OPT,   "flight_hud_portrait_3d", 0, "3D Radio Portrait" },
+#endif
 /* Not on mobile: it would not do anything. PsyX_SPUAL_SetOutputMode is an
  * empty stub on the software backend and GetOutputMode always answers
  * stereo -- the only surround path for the software SPU is audio_spatial,

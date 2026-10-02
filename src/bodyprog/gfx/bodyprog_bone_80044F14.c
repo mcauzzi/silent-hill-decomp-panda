@@ -262,6 +262,11 @@ static int g_BoneLogFrames = 0;
  * upper-arms) that would clip into the eye. Scoped to that one draw — NPC
  * skeletons (different bone indices) are untouched. */
 int g_PcHideHarryFpsBody = 0;
+/* Set by the flight HUD's comm portrait pass (pc_flight_hud.c): a bone whose
+ * view-space origin sits more than this far below the camera (Q8, +Y down) is
+ * not drawn, so a head-and-shoulders framing stays inside its box. */
+int g_PcPortraitCullActive = 0;
+s32 g_PcPortraitCullViewY  = 0;
 #endif
 
 void func_80045534(s_Skeleton* skel, GsOT* ot, s32 arg2, GsCOORDINATE2* boneCoords, q3_12 arg4, u16 arg5, s_FsImageDesc* images) // 0x80045534
@@ -386,7 +391,8 @@ void func_80045534(s_Skeleton* skel, GsOT* ot, s32 arg2, GsCOORDINATE2* boneCoor
              * head) — hide them with it or the hair floats in front of the eye. */
             {
                 int _hb = (u8)curBone->bone.idx;
-                if (!(g_PcHideHarryFpsBody && (_hb == 2 || _hb >= 18)))
+                if (!(g_PcHideHarryFpsBody && (_hb == 2 || _hb >= 18)) &&
+                    !(g_PcPortraitCullActive && viewMat.t[1] > g_PcPortraitCullViewY))
                 {
                     func_80057090(&curBone->bone.modelInfo, ot, arg2, &viewMat, &worldMat, arg5);
                 }

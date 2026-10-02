@@ -89,6 +89,15 @@ resto è rosso.
   riavvio.
 - Finché non c'è un primo piano si vede un **busto stilizzato a fil di ferro**.
 
+**Ritratto 3D (sperimentale, `flight_hud_portrait_3d`, spento di default).**
+Al posto del ritaglio, il riquadro mostra il **modello 3D vero** di chi parla,
+ripreso da una seconda telecamera puntata sulla testa (vista di tre quarti, solo
+testa e spalle). Il mostro in scena appare con la sua posa dal vivo; Cybil e chi
+non è in scena sono un "manichino" posato con la prima posa della loro
+animazione. Funziona sempre, anche senza averli mai visti da vicino. Su telefono
+si accende dal menu rapido (pagina HUD & Audio, "3D Radio Portrait") o dalle
+Opzioni ("Portrait_3D"); su PC da `config.cfg`.
+
 ### Stile Classic
 
 Stesse funzioni con un altro aspetto: nastro della bussola in alto, nastri
@@ -114,6 +123,7 @@ scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
 | 1 | DESTROYED + "+1000" | [~] |
 | 2 | Messaggi radio | [~] |
 | 2b | Ritratti presi dal gioco | [~] mai visti in gioco: priorità del prossimo test |
+| 2c | Ritratto 3D con seconda telecamera | [~] sperimentale, spento di default: da provare |
 | 3 | Frecce sul bordo | [~] |
 | 4 | MISSION UPDATE | [~] |
 | 5 | Terzo allarme (EVADE) | [~] |
@@ -124,6 +134,10 @@ scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
 ### Da provare in gioco
 
 - [ ] Bar iniziale: Cybil viene catturata? Il ritaglio è centrato sul volto?
+- [ ] Con "3D Radio Portrait" acceso: al primo messaggio radio compare il
+      modello di Cybil (testa e spalle) dentro il riquadro? Il modello esce dal
+      riquadro? Glitch nella scena intorno?
+- [ ] Con il 3D acceso, il mostro che fa lock appare in diretta nel riquadro?
 - [ ] Primo mostro (Air Screamer nel bar): riquadro, nome, barra salute, frecce quando esce di scena.
 - [ ] Lock: WARNING → MISSILE ALERT → tutto rosso, voce radio di Cybil con il suo ritratto.
 - [ ] Mostro che fa lock da vicino: EVADE e bordi rossi; ritratto in diretta del mostro.
@@ -172,6 +186,19 @@ screenshot.
     `GR_ScreenReadFBO()` in una texture 128×128 per `charaId`; salvataggio in
     `gamedata/hud_portraits/<charaId>.rgba`. Disegno con `Ah_PortraitDraw`;
     `Ah_Portrait` è il ripiego a fil di ferro.
+  - Ritratto 3D: `Pc_FlightHud_Portrait3dPass` (chiamato in
+    `game_sys_states.c` subito dopo `Gfx_InGameDraw(1)`). Salva `VbWvsMatrix`,
+    `GsWSMATRIX`, `D_800C3868`, offset e distanza di proiezione GTE; imposta una
+    telecamera da ritratto con `vbSetWorldScreenMatrix`, sposta il centro di
+    proiezione sul riquadro (spazio UI = `g_PcHudRect`) e disegna lo scheletro
+    con `func_80045534` in un ordering table privato; poi ricollega i prim, in
+    ordine, in testa a `g_OrderingTable2` (il livello 2D sopra il mondo) e
+    ripristina tutto. Le ossa sotto le spalle sono saltate con
+    `g_PcPortraitCullActive` / `g_PcPortraitCullViewY`
+    (`src/bodyprog/gfx/bodyprog_bone_80044F14.c`); la nebbia è spenta durante
+    il disegno. `Ah_Portrait3dCapture` copia poi il riquadro nella texture del
+    ritratto. Modello e animazioni dei personaggi non in scena vengono dal pool
+    globale (`global_chara_pool`, slot `PC_CHARA_ANIM_SLOT`).
 - Config: `flight_hud`, `flight_hud_sound`, `flight_hud_opacity`,
   `flight_hud_callsigns` — `pc_port/src/pc_config.c`, `pc_port/include/pc_config.h`,
   documentati in `pc_port/config.cfg`. Riga "Flight HUD" in
