@@ -144,38 +144,65 @@ enum
     AH_RC_FLARE,
     AH_RC_ZONE,
     AH_RC_BOSS,
+    AH_RC_TAUNT, /* the monster that just locked on, on an open channel */
     AH_RC_COUNT
+};
+
+/* Comm portrait shapes */
+enum
+{
+    AH_FACE_CYBIL,
+    AH_FACE_HUMAN, /* nurses, doctors, the possessed Cybil */
+    AH_FACE_DOG,
+    AH_FACE_BIRD,
+    AH_FACE_CHILD,
+    AH_FACE_BEAST,
+    AH_FACE_COUNT
 };
 
 typedef struct
 {
     int         cat;
-    const char* who;
+    int         face;
+    const char* who; /* NULL: the calling monster's name */
     const char* line;
 } s_AhRadioLine;
 
 static const s_AhRadioLine s_radioLines[] = {
-    { AH_RC_LOCK,  "CYBIL", "HARRY, YOU'VE GOT A LOCK ON YOU!" },
-    { AH_RC_LOCK,  "CYBIL", "ONE OF THEM HAS YOU IN ITS SIGHTS!" },
-    { AH_RC_KILL,  "CYBIL", "NICE SHOT, HARRY." },
-    { AH_RC_KILL,  "CYBIL", "TARGET DOWN." },
-    { AH_RC_KILL,  "CYBIL", "SPLASH ONE. KEEP MOVING." },
-    { AH_RC_HURT,  "CYBIL", "YOU'RE HIT BAD. PATCH YOURSELF UP!" },
-    { AH_RC_HURT,  "CYBIL", "HARRY, YOU'RE BLEEDING. HEAL UP!" },
-    { AH_RC_DRY,   "CYBIL", "YOU'RE DRY! RELOAD!" },
-    { AH_RC_DRY,   "CYBIL", "MAGAZINE'S EMPTY, HARRY!" },
-    { AH_RC_FLARE, "CYBIL", "OUT OF FLARES. STAY OUT OF SIGHT." },
-    { AH_RC_ZONE,  "CYBIL", "NEW AREA. KEEP YOUR EYES OPEN." },
-    { AH_RC_ZONE,  "CYBIL", "I DON'T LIKE THE LOOK OF THIS PLACE." },
-    { AH_RC_BOSS,  "CYBIL", "IT'S DOWN! GOOD WORK, HARRY." },
+    { AH_RC_LOCK,  AH_FACE_CYBIL, "CYBIL", "HARRY, YOU'VE GOT A LOCK ON YOU!" },
+    { AH_RC_LOCK,  AH_FACE_CYBIL, "CYBIL", "ONE OF THEM HAS YOU IN ITS SIGHTS!" },
+    { AH_RC_KILL,  AH_FACE_CYBIL, "CYBIL", "NICE SHOT, HARRY." },
+    { AH_RC_KILL,  AH_FACE_CYBIL, "CYBIL", "TARGET DOWN." },
+    { AH_RC_KILL,  AH_FACE_CYBIL, "CYBIL", "SPLASH ONE. KEEP MOVING." },
+    { AH_RC_HURT,  AH_FACE_CYBIL, "CYBIL", "YOU'RE HIT BAD. PATCH YOURSELF UP!" },
+    { AH_RC_HURT,  AH_FACE_CYBIL, "CYBIL", "HARRY, YOU'RE BLEEDING. HEAL UP!" },
+    { AH_RC_DRY,   AH_FACE_CYBIL, "CYBIL", "YOU'RE DRY! RELOAD!" },
+    { AH_RC_DRY,   AH_FACE_CYBIL, "CYBIL", "MAGAZINE'S EMPTY, HARRY!" },
+    { AH_RC_FLARE, AH_FACE_CYBIL, "CYBIL", "OUT OF FLARES. STAY OUT OF SIGHT." },
+    { AH_RC_ZONE,  AH_FACE_CYBIL, "CYBIL", "NEW AREA. KEEP YOUR EYES OPEN." },
+    { AH_RC_ZONE,  AH_FACE_CYBIL, "CYBIL", "I DON'T LIKE THE LOOK OF THIS PLACE." },
+    { AH_RC_BOSS,  AH_FACE_CYBIL, "CYBIL", "IT'S DOWN! GOOD WORK, HARRY." },
+    { AH_RC_TAUNT, AH_FACE_DOG,   NULL,    "GRRRRR... RAWR!" },
+    { AH_RC_TAUNT, AH_FACE_DOG,   NULL,    "ARF! ARF! GRRRAAAH!" },
+    { AH_RC_TAUNT, AH_FACE_BIRD,  NULL,    "SKREEEEEEEE!" },
+    { AH_RC_TAUNT, AH_FACE_BIRD,  NULL,    "KRAAAAAAH!" },
+    { AH_RC_TAUNT, AH_FACE_CHILD, NULL,    "HEE HEE HEE..." },
+    { AH_RC_TAUNT, AH_FACE_CHILD, NULL,    "KYAAAAAA!" },
+    { AH_RC_TAUNT, AH_FACE_HUMAN, NULL,    "...HHHHHHH..." },
+    { AH_RC_TAUNT, AH_FACE_HUMAN, NULL,    "MMMNNNGH..." },
+    { AH_RC_TAUNT, AH_FACE_BEAST, NULL,    "RAWR!" },
+    { AH_RC_TAUNT, AH_FACE_BEAST, NULL,    "RAWR! RAWR!" },
+    { AH_RC_TAUNT, AH_FACE_BEAST, NULL,    "GRAAAAAAGH!" },
 };
 #define AH_RADIO_LINES ((int)(sizeof(s_radioLines) / sizeof(s_radioLines[0])))
 
 static int   s_radioQ[AH_RADIO_QUEUE];
+static int   s_radioChara[AH_RADIO_QUEUE];
 static int   s_radioN;
 static float s_radioT;
 static int   s_radioLast = -1;
 static float s_radioCool[AH_RC_COUNT];
+static int   s_newLockSlot = -1;
 static int   s_radioPrevLock;
 static float s_radioPrevHp = 100.0f;
 static int   s_radioPrevWeapon = -1, s_radioPrevAmmo;
@@ -402,8 +429,34 @@ static void Ah_FlareSim(float dt)
 /* Radio                                                               */
 /* ------------------------------------------------------------------ */
 
-static void Ah_Radio(int cat)
+static int Ah_FaceOf(int charaId)
 {
+    switch (charaId)
+    {
+        case Chara_Groaner:
+        case Chara_Romper:
+            return AH_FACE_DOG;
+        case Chara_AirScreamer:
+        case Chara_NightFlutter:
+        case Chara_Floatstinger:
+            return AH_FACE_BIRD;
+        case Chara_GreyChild:
+        case Chara_Mumbler:
+        case Chara_LarvalStalker:
+        case Chara_Stalker:
+            return AH_FACE_CHILD;
+        case Chara_PuppetNurse:
+        case Chara_PuppetDoctor:
+        case Chara_MonsterCybil:
+            return AH_FACE_HUMAN;
+        default:
+            return AH_FACE_BEAST;
+    }
+}
+
+static void Ah_RadioFrom(int cat, int charaId)
+{
+    const int face = (cat == AH_RC_TAUNT) ? Ah_FaceOf(charaId) : AH_FACE_CYBIL;
     int pick[AH_RADIO_LINES];
     int n = 0, i;
 
@@ -411,17 +464,23 @@ static void Ah_Radio(int cat)
         return;
 
     for (i = 0; i < AH_RADIO_LINES; i++)
-        if (s_radioLines[i].cat == cat && i != s_radioLast)
+        if (s_radioLines[i].cat == cat && s_radioLines[i].face == face && i != s_radioLast)
             pick[n++] = i;
     if (n == 0)
         return;
 
-    s_radioLast        = pick[(int)(Ah_Rand() * n) % n];
-    s_radioQ[s_radioN] = s_radioLast;
+    s_radioLast            = pick[(int)(Ah_Rand() * n) % n];
+    s_radioQ[s_radioN]     = s_radioLast;
+    s_radioChara[s_radioN] = charaId;
     if (s_radioN == 0)
         s_radioT = AH_RADIO_TIME;
     s_radioN++;
     s_radioCool[cat] = AH_RADIO_COOLDOWN;
+}
+
+static void Ah_Radio(int cat)
+{
+    Ah_RadioFrom(cat, 0);
 }
 
 static void Ah_RadioTick(float dt)
@@ -437,7 +496,11 @@ static void Ah_RadioTick(float dt)
             s_radioCool[i] -= dt;
 
     if (s_anyLock && !s_radioPrevLock)
+    {
+        if (s_newLockSlot >= 0 && Ah_Rand() < 0.6f)
+            Ah_RadioFrom(AH_RC_TAUNT, g_SysWork.npcs[s_newLockSlot].model.charaId);
         Ah_Radio(AH_RC_LOCK);
+    }
     s_radioPrevLock = s_anyLock;
 
     if (hp > 0.0f && hp < 25.0f && s_radioPrevHp >= 25.0f)
@@ -456,7 +519,10 @@ static void Ah_RadioTick(float dt)
         if (s_radioT <= 0.0f)
         {
             for (i = 1; i < s_radioN; i++)
-                s_radioQ[i - 1] = s_radioQ[i];
+            {
+                s_radioQ[i - 1]     = s_radioQ[i];
+                s_radioChara[i - 1] = s_radioChara[i];
+            }
             s_radioN--;
             s_radioT = (s_radioN > 0) ? AH_RADIO_TIME : 0.0f;
         }
@@ -677,6 +743,7 @@ static void Ah_LockScan(float dt)
     int i;
 
     s_anyTrack = s_anyLock = s_danger = 0;
+    s_newLockSlot = -1;
 
     for (i = 0; i < NPC_COUNT_MAX; i++)
     {
@@ -733,7 +800,11 @@ static void Ah_LockScan(float dt)
         }
 
         if (s_lockT[i] >= AH_LOCK_TIME)
+        {
+            if (s_lockState[i] != 2)
+                s_newLockSlot = i;
             s_lockState[i] = 2;
+        }
         else if (tracking)
             s_lockState[i] = 1;
         else if (s_lockState[i] == 2 && s_lockT[i] > 0.0f)
@@ -1546,15 +1617,189 @@ static void Ah_KillFx(float scoreX, float scoreY, float nowS)
     }
 }
 
+/* Comm portrait: a wireframe bust built from a deformed ellipsoid, turned and
+ * lit by depth. Shapes come from parameters rather than the game's models: the
+ * speaker is rarely loaded (Cybil is not in most maps), and a second pass
+ * through the PSX pipeline for a corner box is not worth its risk. */
+typedef struct
+{
+    float rx, ry, rz;  /* half extents */
+    float snout, sharp; /* muzzle length, and how narrow it is (cos power) */
+    float jaw;         /* jaw drop at full open */
+    float ears;        /* ears / horns on the upper sides */
+    int   hair, bust, glowEyes;
+} s_AhFace;
+
+static const s_AhFace s_faces[AH_FACE_COUNT] = {
+    [AH_FACE_CYBIL] = { 0.78f, 1.00f, 0.86f, 0.10f, 2.0f, 0.14f, 0.00f, 1, 1, 0 },
+    [AH_FACE_HUMAN] = { 0.78f, 1.00f, 0.86f, 0.10f, 2.0f, 0.30f, 0.00f, 0, 1, 1 },
+    [AH_FACE_DOG]   = { 0.70f, 0.72f, 0.80f, 1.50f, 2.5f, 0.55f, 0.55f, 0, 0, 1 },
+    [AH_FACE_BIRD]  = { 0.62f, 0.70f, 0.70f, 2.00f, 8.0f, 0.45f, 0.00f, 0, 0, 1 },
+    [AH_FACE_CHILD] = { 0.80f, 0.92f, 0.82f, 0.00f, 2.0f, 0.40f, 0.00f, 0, 1, 1 },
+    [AH_FACE_BEAST] = { 0.95f, 0.88f, 0.90f, 0.55f, 2.0f, 0.70f, 0.85f, 0, 0, 1 },
+};
+
+#define AH_FACE_RINGS 9
+#define AH_FACE_SEGS  14
+#define AH_MOUTH_TH   (0.62f * AH_PI)
+
+static void Ah_FacePoint(const s_AhFace* f, float th, float ph, float open, float* x, float* y, float* z)
+{
+    const float front = cosf(ph) > 0.0f ? cosf(ph) : 0.0f;
+    const float side  = fabsf(sinf(ph));
+    float m, h, k;
+
+    *x = f->rx * sinf(th) * sinf(ph);
+    *y = -f->ry * cosf(th);
+    *z = f->rz * sinf(th) * cosf(ph);
+
+    m   = (th - AH_MOUTH_TH) / (0.22f * AH_PI);
+    *z += f->snout * powf(front, f->sharp) * expf(-m * m);
+
+    if (th > AH_MOUTH_TH)
+    {
+        k   = (th - AH_MOUTH_TH) / (AH_PI - AH_MOUTH_TH);
+        *y += f->jaw * open * (0.4f + 0.6f * k) * front;
+    }
+
+    m  = (th - 0.22f * AH_PI) / (0.1f * AH_PI);
+    h  = f->ears * powf(side, 8.0f) * expf(-m * m);
+    *y -= h * 0.9f;
+    *x += (sinf(ph) < 0.0f ? -h : h) * 0.3f;
+}
+
+static void Ah_Portrait(float l, float t, float size, int face, int monster, float age, float nowS)
+{
+    static const float red[4] = { 1.0f, 0.3f, 0.25f, 0.95f };
+    const s_AhFace* f  = &s_faces[face];
+    const float     cx = l + size * 0.5f, cy = t + size * 0.42f, sc = size * 0.3f;
+    const float     yaw = 0.4f + 0.35f * sinf(nowS * 0.7f), pitch = 0.08f * sinf(nowS * 0.9f);
+    const float     cyw = cosf(yaw), syw = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch);
+    float base[4];
+    float px[AH_FACE_RINGS + 1][AH_FACE_SEGS], py[AH_FACE_RINGS + 1][AH_FACE_SEGS], pz[AH_FACE_RINGS + 1][AH_FACE_SEGS];
+    float open = 0.0f, y;
+    int   j, k, n;
+
+    memcpy(base, monster ? red : s_main, sizeof(base));
+    base[3] = s_main[3];
+
+    s_cur = &s_fill;
+    Ah_Color(0.0f, 0.08f, 0.03f, 0.6f * s_main[3]);
+    Ah_Rect(l, t, l + size, t + size);
+    Ah_Color(base[0], base[1], base[2], 0.045f * s_main[3]);
+    for (y = t + 2.0f; y < t + size; y += 4.0f)
+        Ah_Rect(l, y, l + size, y + 0.8f);
+    s_cur = &s_hud;
+
+    Ah_UseMain();
+    Ah_Box(l, t, l + size, t + size, s_th);
+
+    /* The channel opens on static; monsters never quite come through clean. */
+    n = (age < 0.25f) ? 14 : (monster ? 3 : 0);
+    for (k = 0; k < n; k++)
+    {
+        float ny = t + 2.0f + Ah_Rand() * (size - 4.0f), nx = l + 2.0f + Ah_Rand() * (size * 0.5f);
+        Ah_Color(base[0], base[1], base[2], (0.15f + 0.35f * Ah_Rand()) * s_main[3]);
+        Ah_Rect(nx, ny, nx + 6.0f + Ah_Rand() * size * 0.45f, ny + 1.0f);
+    }
+    if (age < 0.25f)
+        return;
+
+    if (age < AH_RADIO_TIME * 0.7f)
+        open = fabsf(sinf(nowS * 11.0f)) * (0.55f + 0.45f * sinf(nowS * 4.3f + 1.0f));
+
+    for (j = 0; j <= AH_FACE_RINGS; j++)
+    {
+        for (k = 0; k < AH_FACE_SEGS; k++)
+        {
+            float x, yy, z, x1, z1;
+            Ah_FacePoint(f, (float)j / AH_FACE_RINGS * AH_PI, (float)k / AH_FACE_SEGS * 2.0f * AH_PI, open, &x, &yy, &z);
+            x1 = x * cyw + z * syw;
+            z1 = -x * syw + z * cyw;
+            px[j][k] = cx + x1 * sc;
+            py[j][k] = cy + (yy * cp - z1 * sp) * sc;
+            pz[j][k] = yy * sp + z1 * cp;
+        }
+    }
+
+    for (j = 0; j <= AH_FACE_RINGS; j++)
+    {
+        for (k = 0; k < AH_FACE_SEGS; k++)
+        {
+            const int k2 = (k + 1) % AH_FACE_SEGS;
+            float     d, a, th;
+
+            th = (f->hair && j <= 3) ? 1.4f : 0.9f;
+            if (j > 0 && j < AH_FACE_RINGS)
+            {
+                d = (pz[j][k] + pz[j][k2]) * 0.5f;
+                a = 0.2f + 0.8f * (d + 0.9f) / 1.8f;
+                if (a > 1.0f) a = 1.0f;
+                if (a < 0.2f) a = 0.2f;
+                Ah_Color(base[0], base[1], base[2], base[3] * a);
+                Ah_Line(px[j][k], py[j][k], px[j][k2], py[j][k2], th);
+            }
+            if (j < AH_FACE_RINGS)
+            {
+                d = (pz[j][k] + pz[j + 1][k]) * 0.5f;
+                a = 0.2f + 0.8f * (d + 0.9f) / 1.8f;
+                if (a > 1.0f) a = 1.0f;
+                if (a < 0.2f) a = 0.2f;
+                Ah_Color(base[0], base[1], base[2], base[3] * a);
+                Ah_Line(px[j][k], py[j][k], px[j + 1][k], py[j + 1][k], th);
+            }
+        }
+    }
+
+    /* Blink every few seconds; glowing eyes never do. */
+    if (f->glowEyes || fmodf(nowS, 3.7f) > 0.12f)
+    {
+        for (k = -1; k <= 1; k += 2)
+        {
+            float x, yy, z, x1, z1, ex, ey, ez, r = f->glowEyes ? 1.6f : 1.0f;
+            Ah_FacePoint(f, 0.47f * AH_PI, k * 0.38f, open, &x, &yy, &z);
+            z += 0.04f;
+            x1 = x * cyw + z * syw;
+            z1 = -x * syw + z * cyw;
+            ex = cx + x1 * sc;
+            ey = cy + (yy * cp - z1 * sp) * sc;
+            ez = yy * sp + z1 * cp;
+            if (ez < 0.1f)
+                continue;
+            if (f->glowEyes)
+                Ah_Color(1.0f, 0.85f, 0.4f, s_main[3]);
+            else
+                Ah_UseMain();
+            Ah_Rect(ex - r, ey - r * 0.6f, ex + r, ey + r * 0.6f);
+        }
+    }
+
+    if (f->bust)
+    {
+        const float neckY = cy + f->ry * sc * 0.9f, shY = t + size * 0.88f, bot = t + size - 1.5f;
+        Ah_Color(base[0], base[1], base[2], base[3] * 0.8f);
+        for (k = -1; k <= 1; k += 2)
+        {
+            Ah_Line(cx + k * 0.28f * sc, neckY, cx + k * 0.32f * sc, shY - 0.15f * sc, 1.0f);
+            Ah_Line(cx + k * 0.32f * sc, shY - 0.15f * sc, cx + k * 1.15f * sc, shY, 1.0f);
+            Ah_Line(cx + k * 1.15f * sc, shY, cx + k * 1.45f * sc, bot, 1.0f);
+        }
+    }
+}
+
 static void Ah_RadioBox(float top)
 {
+    static const float red[4] = { 1.0f, 0.3f, 0.25f, 0.95f };
     const s_AhRadioLine* m;
+    const int  chara = s_radioChara[0];
+    const char* who;
     char  buf[64];
     float w, h = 32.0f;
 
     if (s_radioN == 0)
         return;
-    m = &s_radioLines[s_radioQ[0]];
+    m   = &s_radioLines[s_radioQ[0]];
+    who = m->who ? m->who : Ah_EnemyName(chara);
     snprintf(buf, sizeof(buf), "<< %s >>", m->line);
     w = Ah_TextWidth(buf, 8.0f) + 20.0f;
 
@@ -1566,8 +1811,14 @@ static void Ah_RadioBox(float top)
     Ah_UseMain();
     Ah_Box(-w * 0.5f, top, w * 0.5f, top + h, s_th);
     Ah_Text(buf, 0.0f, top + 18.0f, 8.0f, 1);
-    Ah_UseHi();
-    Ah_Text(m->who, -w * 0.5f + 8.0f, top + 5.0f, 7.0f, 0);
+    if (m->who)
+        Ah_UseHi();
+    else
+        Ah_Color(red[0], red[1], red[2], red[3] * s_main[3]);
+    Ah_Text(who, -w * 0.5f + 8.0f, top + 5.0f, 7.0f, 0);
+
+    Ah_Portrait(w * 0.5f + 4.0f, top, 72.0f, m->face, m->who == NULL, AH_RADIO_TIME - s_radioT,
+                (float)SDL_GetTicks() / 1000.0f);
 }
 
 static void Ah_Banner(float cy)
