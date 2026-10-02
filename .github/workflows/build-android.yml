@@ -69,6 +69,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+          # The build runs this Gradle, never a wrapper. The only wrapper JARs
+          # in the tree are inside the SDL submodules, whose checksum the
+          # action does not know, and they fail the job before anything builds.
+          validate-wrappers: false
 
       - name: Toolchain versions
         run: |
