@@ -256,6 +256,7 @@ typedef struct {
     int flightHud;             /* 0 = off, 1 = modern, 2 = classic (tapes) fighter-jet style HUD: flight overlay, MISSILE ALERT on enemy lock, flares on L3+R3 (config key: flight_hud) */
     int flightHudSound;        /* 1 = lock warning tones while an enemy tracks / locks Harry (config key: flight_hud_sound) */
     int flightHudOpacity;      /* HUD opacity in percent, 10..100 (config key: flight_hud_opacity) */
+    int flightHudCallsigns;    /* target labels: 0 = monster names, 1 = BANDIT/BOGEY, 2 = TGT-nn by slot (config key: flight_hud_callsigns) */
     int aimAssist;          /* 1 = OTS/TPS free-aim aim assist (mouse body-coverage + controller auto-aim) (config key: aim_assist) */
     int mouseCursor;        /* 1 = mouse controls cursor puzzles + clickable main menu (config key: mouse_cursor) */
     int touchControls;      /* on-screen touch controls during gameplay -- floating movement stick on the left, drag to look on the right, tap for Action, plus Aim/Fire/Item/Map/Start buttons. e_TouchControlsMode (config key: touch_controls); defaults to Automatic where a touchscreen is the only input */

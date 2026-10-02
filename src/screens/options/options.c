@@ -243,6 +243,10 @@ static const char* const LBL_TSTYLE[] = { "Context", "Gamepad" };
 static const char* const LBL_WHZ[]    = { "30_Hz", "60_Hz" };
 static const int VAL_FHUD[]   = { 0, 1, 2 };
 static const char* const LBL_FHUD[]   = { "Off", "Modern", "Classic" };
+#if defined(SH_IOS) || defined(__ANDROID__)
+static const int VAL_FHNAME[] = { 0, 1, 2 };
+static const char* const LBL_FHNAME[] = { "Names", "Callsigns", "Numbered" };
+#endif
 
 static const int RES_W[] = { 640, 1280, 1366, 1600, 1920, 2560, 3840 };
 static const int RES_H[] = { 480,  720,  768,  900, 1080, 1440, 2160 };
@@ -451,6 +455,8 @@ static const s_PcOpt PCOPT_M[] = {
     { "Controller",        NULL,                          "preferred_controller", NULL,      0, NULL,       NULL, 1, PCK_PAD },
     { "Bullet_Decals",     &g_PcConfig.bulletDecals,      "bullet_decals",       VAL_ONOFF,  2, LBL_ONOFF,  NULL, 1, PCK_INT },
     { "Flight_HUD",        &g_PcConfig.flightHud,          "flight_hud",            VAL_FHUD, 3, LBL_FHUD, NULL, 1, PCK_INT },
+    /* Config-only on desktop: the HUD page there is at the row ceiling. */
+    { "Target_Labels",     &g_PcConfig.flightHudCallsigns, "flight_hud_callsigns",  VAL_FHNAME, 3, LBL_FHNAME, NULL, 1, PCK_INT },
     /* Mobile only, because a phone has no launcher: everywhere else the
      * launcher owns the account and the game just consumes its token. */
     { "Achievements",      NULL,                          NULL,                  NULL,       0, NULL,       NULL, 0, PCK_RALOGIN },

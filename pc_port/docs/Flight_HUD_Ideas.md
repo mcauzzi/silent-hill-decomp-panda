@@ -6,22 +6,31 @@ fatta (e annotare il commit).
 
 Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
 
+Tutte le voci sono implementate e controllate nell'anteprima offline; restano
+`[~]` finché non sono provate nel gioco vero (Android o PC).
+
 ## Riepilogo
 
 | # | Idea | Priorità | Stato |
 |---|------|----------|-------|
-| 1 | "DESTROYED" + "+1000" all'uccisione | Alta | [ ] |
-| 2 | Messaggi radio (riquadro con nome + frase) | Media | [ ] |
-| 3 | Frecce sul bordo per i nemici fuori schermo | Alta | [ ] |
-| 4 | Banner "MISSION UPDATE" al cambio zona / evento | Media | [ ] |
-| 5 | Terzo livello di allarme (attacco imminente) | Media | [ ] |
-| 6 | Schermata di fine missione con voto | Bassa | [ ] |
-| 7 | Barra salute nel riquadro del bersaglio | Media | [ ] |
-| 8 | Callsign per i mostri (BANDIT, TGT-01...) | Bassa | [ ] |
+| 1 | "DESTROYED" + "+1000" all'uccisione | Alta | [~] |
+| 2 | Messaggi radio (riquadro con nome + frase) | Media | [~] |
+| 3 | Frecce sul bordo per i nemici fuori schermo | Alta | [~] |
+| 4 | Banner "MISSION UPDATE" al cambio zona / evento | Media | [~] |
+| 5 | Terzo livello di allarme (attacco imminente) | Media | [~] |
+| 6 | Schermata di fine missione con voto | Bassa | [~] |
+| 7 | Barra salute nel riquadro del bersaglio | Media | [~] |
+| 8 | Callsign per i mostri (BANDIT, TGT-01...) | Bassa | [~] |
 
 ---
 
 ## 1. "DESTROYED" + "+1000" all'uccisione
+
+> **Implementato.** Morte = stesso `charaId`, salute passata da > 0 a <= 0 (non si
+> guarda `collision.state`, che può cambiare prima). Entrambi gli stili; il
+> "+1000" parte sopra il DESTROYED e vola allo SCORE. Bip = `Sfx_MenuConfirm`,
+> solo con `flight_hud_sound`.
+
 
 - Quando un nemico muore: testo **DESTROYED** proiettato sopra il punto in cui
   è morto (resta ~1,2 s), e un **+1000** che sale verso lo SCORE in alto a
@@ -34,6 +43,13 @@ Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
 - Lo SCORE oggi è `(meleeKillCount + rangedKillCount) * 1000`, quindi resta coerente.
 
 ## 2. Messaggi radio
+
+> **Implementato.** Tabella `s_radioLines` (parla Cybil), coda di 3, 3,6 s a messaggio,
+> 25 s di pausa per tipo, mai la stessa frase due volte di fila. Trigger: lock,
+> uccisione, salute sotto 25, caricatore a 0, ultimo flare, nuova zona, boss.
+> Modern: in alto al centro (scende a y -172 sul touch con Quick Save/Load);
+> Classic: sotto il nastro della prua.
+
 
 - Riquadro in alto al centro: riga 1 nome (es. "Cybil"), riga 2 la frase tra
   `<< >>`. Dura 3–4 s, coda di massimo 2–3 messaggi, mai lo stesso due volte
@@ -48,6 +64,9 @@ Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
 
 ## 3. Frecce per i nemici fuori schermo
 
+> **Implementato.** `Ah_OffscreenArrows`, entrambi gli stili. Margine 20 unità.
+
+
 - Per ogni nemico vivo entro `AH_TARGET_RANGE` che `Ah_Project` scarta (dietro
   la camera o fuori dai bordi): triangolino sul bordo dell'area HUD nella
   direzione del nemico, con la distanza accanto.
@@ -59,6 +78,12 @@ Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
 
 ## 4. Banner "MISSION UPDATE"
 
+> **Implementato.** Tabelle `s_zoneNames` / `s_mapZone` (le mappe senza nome noto
+> danno -1 e niente banner). La zona in cui si carica la partita non viene
+> annunciata. Se c'è un debriefing a schermo il banner aspetta. Posizione
+> y +104, sotto il centro, in entrambi gli stili.
+
+
 - Banner centrale con due righe: "MISSION UPDATE" + nome zona (es. "OLD SILENT
   HILL", "MIDWICH ELEMENTARY SCHOOL"). Entra/esce con una linea che si allarga.
 - Trigger: cambio di `g_SavegamePtr->mapIdx` (o del mapOverlay caricato) mentre
@@ -66,6 +91,11 @@ Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
 - Mostrare una volta per zona per sessione, non a ogni porta.
 
 ## 5. Terzo livello di allarme
+
+> **Implementato.** Lock da meno di 2,5 m (`AH_DANGER_RANGE`): bip ogni 0,08 s,
+> "EVADE" sotto MISSILE ALERT, bordo rosso pulsante (`Ah_DangerEdge`).
+> "Sta attaccando" non è rilevato: la distanza basta e vale per ogni mostro.
+
 
 - Oggi: WARNING (un nemico ti sta puntando) → MISSILE ALERT (lock fatto).
 - Aggiungere un livello quando un nemico con lock è anche molto vicino (< 2–3 m)
@@ -75,6 +105,17 @@ Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
   pulsando, per non sommare due effetti rossi.
 
 ## 6. Schermata di fine missione
+
+> **Implementato.** "Missione" = da un debriefing al successivo. Si chiude alla
+> morte di un boss (Split Head, Floatstinger, Twinfeeler, Bloodsucker,
+> Incubus, Cybil mostro) o al primo ingresso nella sessione in un nuovo
+> capitolo (`MAPn` della mappa; l'ordine non è crescente: la città è MAP2, la
+> scuola MAP1). Un tratto senza uccisioni né colpi sparati (la passeggiata
+> iniziale) non ha debriefing. Pannello di 7 s, non blocca l'input. Voto:
+> precisione fino a 60 punti (45 se non si spara) + 4 per uccisione fino a 40;
+> S >= 85, A >= 70, B >= 50, altrimenti C. Un caricamento si riconosce dai
+> contatori che tornano indietro e fa ripartire le statistiche.
+
 
 - Dopo un boss o un cambio di capitolo: pannello con TIME, SCORE, nemici
   abbattuti, colpi sparati / a segno, voto (S/A/B/C).
@@ -88,6 +129,10 @@ Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
 
 ## 7. Barra salute nel riquadro del bersaglio
 
+> **Implementato.** Modern: sotto il rombo del bersaglio più vicino. Classic: sotto
+> il riquadro del più vicino, la distanza scende di una riga.
+
+
 - Sotto il riquadro del bersaglio principale (`best` in `Ah_Targets`): barra
   sottile con la salute residua del mostro.
 - La salute massima cambia per mostro e difficoltà: memorizzare la salute più
@@ -95,6 +140,12 @@ Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
   100%.
 
 ## 8. Callsign per i mostri
+
+> **Implementato.** `flight_hud_callsigns`: 0 nomi, 1 BOGEY / BANDIT (BANDIT quando
+> ti sta puntando), 2 TGT-nn per slot. Nelle Opzioni solo sul telefono
+> ("Target_Labels", pagina PCOPT_M); sul desktop la pagina HUD è piena, quindi
+> solo da config.
+
 
 - Opzione per sostituire "GROANER", "AIR SCREAMER"... con nomi in codice:
   "BANDIT", "BOGEY", oppure "TGT-01", "TGT-02" per slot.
@@ -123,7 +174,7 @@ Stato: `[ ]` da fare · `[~]` in corso · `[x]` fatto
     Ogni idea va decisa per entrambi, o solo per Modern.
   - Layout touch: ramo `touch` (`Pc_Touch_IsDrivingInput()`) in entrambi i build.
 - Config: `flight_hud` (0 off / 1 modern / 2 classic), `flight_hud_sound`,
-  `flight_hud_opacity` — `pc_port/src/pc_config.c`, `pc_port/include/pc_config.h`,
+  `flight_hud_opacity`, `flight_hud_callsigns` — `pc_port/src/pc_config.c`, `pc_port/include/pc_config.h`,
   documentati in `pc_port/config.cfg`. Riga "Flight HUD" in
   `src/screens/options/options.c` e nel menu rapido (`pc_port/src/pc_quick_options.c`).
   Le pagine Opzioni hanno un tetto di righe: la pagina HUD del telefono è piena.
@@ -144,5 +195,6 @@ $CMD -Wno-unused-label -o harness harness.c -lSDL2 -lm -Wl,--unresolved-symbols=
 ```
 
 Produce `normal.png`, `alert.png`, `flare.png`, `aim.png`, `classic.png`,
-`touch.png`. Lo sfondo è finto: serve solo a controllare layout e colori.
+`touch.png`, `events.png` / `events_classic.png` (uccisione, radio, frecce,
+callsign numerati), `danger.png` (terzo allarme), `banner.png`, `debrief.png`. Lo sfondo è finto: serve solo a controllare layout e colori.
 Prima di chiudere una voce, provarla comunque nel gioco vero (Android o PC).

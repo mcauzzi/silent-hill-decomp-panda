@@ -109,6 +109,7 @@ s_PcConfig g_PcConfig = {
     .flightHud              = 1,
     .flightHudSound         = 1,
     .flightHudOpacity       = 100,
+    .flightHudCallsigns     = 0,
     .aimAssist           = 1, /* OTS/TPS free-aim aim assist (mouse body-coverage + controller auto-aim) */
     .mouseCursor         = 1, /* mouse controls cursor puzzles + clickable main menu */
 #if defined(__ANDROID__) || defined(SH_IOS)
@@ -1054,6 +1055,13 @@ void PcConfig_Load(const char* path)
             if (v < 10)  v = 10;
             if (v > 100) v = 100;
             g_PcConfig.flightHudOpacity = v;
+        }
+        else if (strcmp(key, "flight_hud_callsigns") == 0)
+        {
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 2) v = 2;
+            g_PcConfig.flightHudCallsigns = v;
         }
         else if (strcmp(key, "mouse_cursor") == 0)
         {
