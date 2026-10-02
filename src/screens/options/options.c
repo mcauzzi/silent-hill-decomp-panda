@@ -457,6 +457,7 @@ static const s_PcOpt PCOPT_M[] = {
     { "Flight_HUD",        &g_PcConfig.flightHud,          "flight_hud",            VAL_FHUD, 3, LBL_FHUD, NULL, 1, PCK_INT },
     /* Config-only on desktop: the HUD page there is at the row ceiling. */
     { "Target_Labels",     &g_PcConfig.flightHudCallsigns, "flight_hud_callsigns",  VAL_FHNAME, 3, LBL_FHNAME, NULL, 1, PCK_INT },
+    { "Portrait_3D",       &g_PcConfig.flightHudPortrait3d, "flight_hud_portrait_3d", VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
     /* Mobile only, because a phone has no launcher: everywhere else the
      * launcher owns the account and the game just consumes its token. */
     { "Achievements",      NULL,                          NULL,                  NULL,       0, NULL,       NULL, 0, PCK_RALOGIN },

@@ -42,6 +42,12 @@
 #include <PsyX/common/glad.h>
 #include <PsyX/PsyX_backend.h>
 #include <libgs.h>
+#include <libgpu.h>
+
+#include "bodyprog/view/vw_calc.h"
+#include "bodyprog/view/vw_system.h"
+#include "bodyprog/game_boot/fs_chara_anim.h"
+#include "bodyprog/screen/screen_data.h"
 
 #include "sh_log.h"
 #include "pc_config.h"
@@ -1641,6 +1647,12 @@ static struct
     float l, t, size, age;
 } s_portDraw;
 
+/* The 3D comm portrait asked for by the radio box (see Ah_Portrait3dPass). */
+static int   s_p3dKey = -1, s_p3dMonster;
+static float s_p3dRect[4];  /* HUD units: l, t, r, b */
+static int   s_p3dDrawn = -1;
+static float s_p3dDrawnRect[4];
+
 static int Ah_PortraitKey(int charaId)
 {
     if (charaId == Chara_EndingCybil)
@@ -1728,6 +1740,15 @@ static void Ah_Portrait(float l, float t, float size, int face, int chara, int m
 
     if (monster)
         s_portLive = chara;
+    if (chara >= 0 && g_PcConfig.flightHudPortrait3d)
+    {
+        s_p3dKey     = chara;
+        s_p3dMonster = monster;
+        s_p3dRect[0] = l;
+        s_p3dRect[1] = t;
+        s_p3dRect[2] = l + size;
+        s_p3dRect[3] = t + size;
+    }
     if (age >= 0.25f && chara >= 0 && s_portTex[chara])
     {
         s_portDraw.on      = 1;
@@ -2818,6 +2839,8 @@ static void Ah_PortraitCapture(const GLint* vp, float nowS)
         if (key != Chara_Cybil && !Ah_NpcLive(npc))
             continue;
 
+        if (s_portQual[key] >= 10000.0f && g_PcConfig.flightHudPortrait3d)
+            continue;
         live = (key == s_portLive);
         if (now - s_portTakenMs[key] < (Uint32)(live ? 90 : 400))
             continue;
@@ -3004,6 +3027,308 @@ static void Ah_PortraitDraw(float nowS)
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, AH_VERT_FLOATS * sizeof(float), (void*)(2 * sizeof(float)));
 }
 
+/* ------------------------------------------------------------------ */
+/* 3D comm portrait: the speaker's own model through a second camera   */
+/* ------------------------------------------------------------------ */
+
+/* The game draws everything through one world->screen matrix, so a second
+ * camera is just a second matrix: for one character, swap in a portrait view
+ * aimed at its head, move the projection centre onto the radio box, and draw
+ * its skeleton again with the game's own character renderer. Its prims go to
+ * a private ordering table spliced in after the world, and the post-capture
+ * draw copies the box out of the frame into the portrait texture.
+ *
+ * A monster that is in the scene is shown in its live pose (the per-type bone
+ * array the AI just posed). Anyone else, Cybil above all, is a puppet: the
+ * global chara pool keeps every model and animation resident, so the puppet is
+ * posed from the first keyframe of its own animation file. Without the pool
+ * entry there is nothing to draw and the captured close-up stands in. */
+
+#define AH_P3D_MAX_BONES 57
+#define AH_P3D_MAX_PRIMS 6144
+
+extern int  g_PcPortraitCullActive;
+extern s32  g_PcPortraitCullViewY;
+extern void ReadGeomOffset(s32* ofx, s32* ofy);
+extern void Math_MatrixTransform(VECTOR3* pos, SVECTOR* rot, GsCOORDINATE2* coord);
+extern s_WorldEnvWork g_WorldEnvWork;
+
+static GsOT          s_p3dOt[2];
+static GsOT_TAG      s_p3dTags[2][ORDERING_TABLE_SIZE];
+static POLY_F4       s_p3dBg[2];
+static GsCOORDINATE2 s_p3dCoords[AH_P3D_MAX_BONES];
+static int           s_p3dPuppetKey = -1;
+
+void Pc_FlightHud_Portrait3dPass(void)
+{
+    const int      buf = g_ActiveBufferIdx;
+    const int      key = s_p3dKey;
+    s_CharaModel*  model;
+    GsCOORDINATE2* coords = NULL;
+    s_AnmHeader*   anm    = NULL;
+    float          yaw    = 0.0f;
+    int            i, nb;
+    s32            minY = 0x7FFFFFFF, maxY = -0x7FFFFFFF, h, topN = 0;
+    s32            sumX = 0, sumZ = 0;
+    s32            tX, tY, tZ, half, dist, hp;
+    MATRIX         saveVb, saveWs, saveD, m;
+    s32            ofx, ofy;
+    long           saveH;
+    GsCOORDINATE2  cam;
+    SVECTOR        dir, rot;
+    float          a;
+    float          boxL, boxT, boxR, boxB;
+    extern float   g_PcHudRect[4];
+
+    s_p3dDrawn = -1;
+    if (!Pc_FlightHud_Enabled() || !g_PcConfig.flightHudPortrait3d || !Ah_InGameplay() || key < 0)
+        return;
+
+    model = g_WorldGfxWork.registeredCharaModels[key];
+    if (model == NULL || !model->isLoaded || model->skeleton.bones_4 == NULL)
+        return;
+
+    {
+        const int idx = g_CharaAnimDataIdxs[key];
+
+        for (i = 0; i < NPC_COUNT_MAX && idx >= 0 && idx < CHARA_ANIM_DATA_COUNT; i++)
+        {
+            const s_SubCharacter* npc = &g_SysWork.npcs[i];
+            if (Ah_PortraitKey(npc->model.charaId) != key || npc->health <= Q12(0.0f) ||
+                !(npc->model.anim.flags & AnimFlag_Visible))
+                continue;
+            if (g_CharaModelAnimsData[idx].boneCoords == NULL || g_CharaModelAnimsData[idx].activeAnmHdr == NULL)
+                break;
+            coords = g_CharaModelAnimsData[idx].boneCoords;
+            anm    = g_CharaModelAnimsData[idx].activeAnmHdr;
+            yaw    = Ah_Turns(npc->rotation.vy) * 2.0f * AH_PI;
+            break;
+        }
+    }
+
+    if (coords == NULL)
+    {
+        VECTOR3 pos = g_SysWork.playerWork.player.position;
+        SVECTOR prot = { 0, 0, 0 };
+
+        anm = g_CharaModelAnimsData[PC_CHARA_ANIM_SLOT(key)].activeAnmHdr;
+        if (anm == NULL || anm->boneCount == 0 || anm->boneCount > AH_P3D_MAX_BONES || anm->keyframeCount == 0)
+            return;
+        if (s_p3dPuppetKey != key)
+        {
+            Anim_BoneInit(anm, s_p3dCoords);
+            s_p3dPuppetKey = key;
+        }
+        Math_MatrixTransform(&pos, &prot, &s_p3dCoords[0]);
+        for (i = 0; i < anm->boneCount; i++)
+            s_p3dCoords[i].flg = 0;
+        Anim_BoneUpdate(anm, s_p3dCoords, 0, anm->keyframeCount > 1 ? 1 : 0, Q12(0.0f));
+        coords = s_p3dCoords;
+    }
+
+    nb = anm->boneCount;
+    if (nb <= 0 || nb > AH_P3D_MAX_BONES)
+        return;
+
+    /* Frame on the top of the body: the head on anything upright, the front of
+     * the body on anything that is not. */
+    for (i = 0; i < nb; i++)
+    {
+        Vw_CoordHierarchyMatrixCompute(&coords[i], &m);
+        if (m.t[1] < minY) minY = m.t[1];
+        if (m.t[1] > maxY) maxY = m.t[1];
+    }
+    h = maxY - minY;
+    if (h < Q8(0.3f))
+        h = Q8(0.3f);
+    for (i = 0; i < nb; i++)
+    {
+        Vw_CoordHierarchyMatrixCompute(&coords[i], &m);
+        if (m.t[1] <= minY + (h * 3) / 10)
+        {
+            sumX += m.t[0];
+            sumZ += m.t[2];
+            topN++;
+        }
+    }
+    if (topN == 0)
+        return;
+    tX = sumX / topN;
+    tZ = sumZ / topN;
+    tY = minY + h / 5;
+
+    half = (h * 22) / 100;
+    if (half < Q8(0.20f)) half = Q8(0.20f);
+    if (half > Q8(0.75f)) half = Q8(0.75f);
+    dist = (half * 46) / 10;
+
+    /* OT2 is drawn in the UI pass, whose screen space is g_PcHudRect (centre
+     * origin, the same frame the touch controls and minimap place against),
+     * not the world's. Map the HUD-unit box into it. */
+    {
+        const float uw = g_PcHudRect[1] - g_PcHudRect[0], uh = g_PcHudRect[3] - g_PcHudRect[2];
+        if (uw <= 1.0f || uh <= 1.0f || s_w2 <= 1.0f)
+            return;
+        boxL = g_PcHudRect[0] + (s_p3dRect[0] / s_w2 * 0.5f + 0.5f) * uw;
+        boxR = g_PcHudRect[0] + (s_p3dRect[2] / s_w2 * 0.5f + 0.5f) * uw;
+        boxT = g_PcHudRect[2] + (s_p3dRect[1] / 480.0f + 0.5f) * uh;
+        boxB = g_PcHudRect[2] + (s_p3dRect[3] / 480.0f + 0.5f) * uh;
+    }
+
+    /* Three-quarter view, a little above the eyes. */
+    a = yaw + 0.42f;
+    cam.flg          = 0;
+    cam.super        = NULL;
+    cam.coord.t[0]   = tX + (s32)(sinf(a) * dist);
+    cam.coord.t[1]   = tY - dist / 12;
+    cam.coord.t[2]   = tZ + (s32)(cosf(a) * dist);
+    dir.vx = (s16)(tX - cam.coord.t[0]);
+    dir.vy = (s16)(tY - cam.coord.t[1]);
+    dir.vz = (s16)(tZ - cam.coord.t[2]);
+    vwVectorToAngle(&rot, &dir);
+    Math_RotMatrixZxyNegGte(&rot, &cam.coord);
+
+    saveVb = VbWvsMatrix;
+    saveWs = GsWSMATRIX;
+    saveD  = D_800C3868;
+    ReadGeomOffset(&ofx, &ofy);
+    saveH = ReadGeomScreen();
+
+    vbSetWorldScreenMatrix(&cam);
+    SetGeomOffset((int)((boxL + boxR) * 0.5f), (int)((boxT + boxB) * 0.5f));
+    hp = (s32)(((boxB - boxT) * 0.5f) * (float)dist / (float)half);
+    if (hp < 8) hp = 8;
+    SetGeomScreen(hp);
+
+    if (s_p3dOt[buf].org == NULL)
+    {
+        s_p3dOt[buf].length = 11;
+        s_p3dOt[buf].org    = s_p3dTags[buf];
+        setPolyF4(&s_p3dBg[buf]);
+    }
+    GsClearOt(0, 0, &s_p3dOt[buf]);
+
+    setXY4(&s_p3dBg[buf], (short)boxL, (short)boxT, (short)boxR, (short)boxT,
+           (short)boxL, (short)boxB, (short)boxR, (short)boxB);
+    setRGB0(&s_p3dBg[buf], 6, 18, 10);
+    AddPrim(&s_p3dOt[buf].org[ORDERING_TABLE_SIZE - 1], &s_p3dBg[buf]);
+
+    g_PcPortraitCullActive = 1;
+    g_PcPortraitCullViewY  = half + half / 2;
+    /* No fog on a comm screen. It would also add the renderer's fog quad, sized
+     * to every bone including the culled ones, spilling out under the box. */
+    {
+        const u8 fog = g_WorldEnvWork.isFogEnabled;
+        g_WorldEnvWork.isFogEnabled = 0;
+        extern int   g_PsyX_NoShadowCast;
+        extern float g_PsyX_CharaFade;
+        g_PsyX_NoShadowCast = 1;
+        g_PsyX_CharaFade    = 0.0f;
+        func_80045534(&model->skeleton, &s_p3dOt[buf], 1, coords, Q8_TO_Q12(CHARA_FILE_INFOS[key].field_6),
+                      func_8003DD74(key, 0), CHARA_FILE_INFOS[key].field_8);
+        g_PsyX_NoShadowCast = 0;
+        g_WorldEnvWork.isFogEnabled = fog;
+    }
+    g_PcPortraitCullActive = 0;
+
+    VbWvsMatrix = saveVb;
+    GsWSMATRIX  = saveWs;
+    D_800C3868  = saveD;
+    SetGeomOffset(ofx, ofy);
+    SetGeomScreen((int)saveH);
+
+    /* Hand the prims to OT2, the 2D layer drawn over the world. Not the whole
+     * table: the renderer gives each empty bucket of the table being drawn a
+     * depth step, and 2048 foreign buckets would run OT2's 16 off the end. The
+     * prims are relinked far-to-near into one chain behind OT2's head bucket,
+     * keeping the painter's order the character renderer gave them. */
+    {
+        static P_TAG* prims[AH_P3D_MAX_PRIMS];
+        GsOT_TAG*     head = &g_OrderingTable2[buf].org[(1 << g_OrderingTable2[buf].length) - 1];
+        uintptr_t     p    = (uintptr_t)s_p3dOt[buf].tag;
+        int           n = 0, guard;
+
+        for (guard = 0; guard < ORDERING_TABLE_SIZE + AH_P3D_MAX_PRIMS && p != 0 && !isendprim(p); guard++)
+        {
+            if (getlen(p) > 0)
+            {
+                if (n == AH_P3D_MAX_PRIMS)
+                    break;
+                prims[n++] = (P_TAG*)p;
+            }
+            p = getaddr(p);
+        }
+        if (n > 0)
+        {
+            for (i = 0; i < n - 1; i++)
+                setaddr(prims[i], prims[i + 1]);
+            setaddr(prims[n - 1], getaddr(head));
+            setaddr(head, prims[0]);
+        }
+    }
+
+    for (i = 0; i < nb && coords == s_p3dCoords; i++)
+        s_p3dCoords[i].flg = 0;
+
+    s_p3dDrawn = key;
+    memcpy(s_p3dDrawnRect, s_p3dRect, sizeof(s_p3dDrawnRect));
+}
+
+/* Copies the box the portrait pass drew into out of the finished frame. */
+static void Ah_Portrait3dCapture(const GLint* vp)
+{
+    const int key = s_p3dDrawn;
+    GLint prevRead = 0, prevDraw = 0, prevTex = 0, prevUnit = 0;
+    GLboolean scissor;
+    int   x0, y0, x1, y1;
+
+    if (key < 0)
+        return;
+    s_p3dDrawn = -1;
+
+    x0 = vp[0] + (int)((s_p3dDrawnRect[0] / s_w2 * 0.5f + 0.5f) * vp[2]) + 2;
+    x1 = vp[0] + (int)((s_p3dDrawnRect[2] / s_w2 * 0.5f + 0.5f) * vp[2]) - 2;
+    y1 = vp[1] + (int)((0.5f - s_p3dDrawnRect[1] / 480.0f) * vp[3]) - 2;
+    y0 = vp[1] + (int)((0.5f - s_p3dDrawnRect[3] / 480.0f) * vp[3]) + 2;
+    if (x1 - x0 < 8 || y1 - y0 < 8)
+        return;
+
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    scissor = glIsEnabled(GL_SCISSOR_TEST);
+    if (scissor)
+        glDisable(GL_SCISSOR_TEST);
+    if (!s_portFbo)
+        glGenFramebuffers(1, &s_portFbo);
+    if (!s_portTex[key])
+        s_portTex[key] = Ah_PortraitNewTex(NULL);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GR_ScreenReadFBO());
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_portFbo);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_portTex[key], 0);
+    glBlitFramebuffer(x0, y0, x1, y1, 0, 0, AH_PORT_SIZE, AH_PORT_SIZE, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+    /* Rendered on purpose, so it outranks any crop and is what gets kept. */
+    s_portTakenMs[key] = SDL_GetTicks();
+    if (s_portQual[key] < 10000.0f || SDL_GetTicks() - s_portSavedMs[key] > 30000)
+    {
+        s_portQual[key]    = 10000.0f;
+        s_portSavedMs[key] = SDL_GetTicks();
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_portFbo);
+        Ah_PortraitSave(key);
+    }
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prevDraw);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
+    glActiveTexture((GLenum)prevUnit);
+    if (scissor)
+        glEnable(GL_SCISSOR_TEST);
+}
+
 void Pc_FlightHud_Draw(void)
 {
     GLint vp[4];
@@ -3043,6 +3368,7 @@ void Pc_FlightHud_Draw(void)
      * map and the pause screen draw something else over the world. */
     if (!s_portLoaded)
         Ah_PortraitLoadAll();
+    Ah_Portrait3dCapture(vp);
     switch (g_SysWork.sysState)
     {
         case SysState_Gameplay:
@@ -3081,6 +3407,7 @@ void Pc_FlightHud_Draw(void)
     s_fill.n = 0;
     s_portDraw.on = 0;
     s_portLive    = -1;
+    s_p3dKey      = -1;
     s_cur    = &s_glow;
     Ah_BuildFlares();
     s_cur = &s_hud;

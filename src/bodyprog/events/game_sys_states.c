@@ -379,6 +379,7 @@ void GameState_InGame_Update(void) // 0x80038BD4
         Ipd_CloseRangeChunksInit();
         Gfx_InGameDraw(1);
 #ifdef SH_PC_PORT
+        { extern void Pc_FlightHud_Portrait3dPass(void); Pc_FlightHud_Portrait3dPass(); }
         /* The world is in the OT for this frame, so the fog-colored clear behind
          * it is correct. Without the world, that clear is the whole image. */
         { extern int g_PcWorldDrawnThisFrame; g_PcWorldDrawnThisFrame = 1; }
