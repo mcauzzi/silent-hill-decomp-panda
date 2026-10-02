@@ -1,0 +1,113 @@
+name: Release Android APK
+
+# Pushing a tag that starts with "v" (e.g. v1.0.0) builds the APK exactly as
+# build-android.yml does and publishes it as a GitHub release under that tag.
+# It can also be run by hand from the Actions tab, giving the tag to create.
+#
+# The APK is signed only by Gradle's debug keystore: fine for sideloading, but a
+# phone will not update over it from an APK signed with a different key.
+#
+# No game data is attached or ever built in. Players supply their own disc image.
+#
+# No repository gate, unlike build-android.yml: a release is an explicit act by
+# whoever owns the repo the tag was pushed to, fork or not.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create and release (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout (with SDL + PsyCross submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Refuse a tag that is already released
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"; exit 1
+          fi
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK components
+        run: |
+          set -eu
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMGR" --licenses >/dev/null 2>&1 || true
+          "$SDKMGR" "platforms;android-34" "build-tools;34.0.0" "ndk;27.3.13750724" "cmake;3.22.1"
+
+      - name: Point the build at this runner's SDK
+        run: echo "sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" > android_port/local.properties
+
+      - name: Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build
+        env:
+          JAVA_HOME_ANDROID: ${{ env.JAVA_HOME }}
+          GRADLE_BIN: gradle
+        run: |
+          chmod +x android_port/build_android.sh
+          ./android_port/build_android.sh
+
+      - name: Check both ABIs are in the APK
+        run: |
+          set -eu
+          APK=android_port/app/build/outputs/apk/debug/app-debug.apk
+          for abi in arm64-v8a armeabi-v7a; do
+            for so in libmain.so libSDL2.so; do
+              unzip -l "$APK" | grep -q "lib/$abi/$so" || { echo "MISSING lib/$abi/$so"; exit 1; }
+            done
+          done
+          cp "$APK" "SilentHill-android-$TAG.apk"
+          sha256sum "SilentHill-android-$TAG.apk" > "SilentHill-android-$TAG.apk.sha256"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          cat > notes.md <<EOF
+          Android build of the Silent Hill native port.
+
+          **No game data is included.** On first run the app asks for your own Silent Hill (PS1) disc image.
+
+          - Install \`SilentHill-android-$TAG.apk\` (Android 5.0+, OpenGL ES 3.0, arm64-v8a or armeabi-v7a).
+          - The APK is debug-signed, for sideloading.
+          EOF
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Silent Hill Android $TAG" \
+            --notes-file notes.md \
+            --generate-notes \
+            "SilentHill-android-$TAG.apk" \
+            "SilentHill-android-$TAG.apk.sha256"
