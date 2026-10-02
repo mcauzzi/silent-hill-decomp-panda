@@ -156,6 +156,15 @@ screenshot.
 - Indicatore di direzione verso l'obiettivo della zona (porta/chiave), se si
   riesce a leggerlo dai flag evento.
 - Testi dell'HUD tradotti (oggi solo inglese).
+- **Indicatore di beccheggio e bussola, solo in prima persona.** Al centro una
+  scala di beccheggio: linee inclinate ogni 5° con i gradi a fianco, che salgono
+  e scendono con lo sguardo e ruotano se la vista si inclina, più la linea
+  dell'orizzonte. In alto un nastro della bussola come `S 199 SW` (direzione
+  in gradi e punto cardinale), sopra la scala. Fuori dalla prima persona non
+  compaiono: con le telecamere fisse del gioco il beccheggio non ha senso.
+  In prima persona il nastro sostituisce quello dello stile Classic, così non
+  ce ne sono due. Dati: direzione e inclinazione della vista in prima persona
+  (sguardo del mouse/stick più il movimento della testa, se attivo).
 
 ---
 
