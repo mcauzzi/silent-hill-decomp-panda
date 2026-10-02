@@ -1153,6 +1153,347 @@ static void Ah_BuildHud(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Classic style (flight_hud = 2): tapes, boresight, round radar      */
+/* ------------------------------------------------------------------ */
+
+static void Ah_HeadingTape(float headingDeg)
+{
+    const float cy = -196.0f, half = 120.0f, ppd = 4.0f;
+    char  buf[8];
+    int   d;
+    int   base = (int)floorf(headingDeg / 5.0f) * 5;
+
+    for (d = base - 35; d <= base + 35; d += 5)
+    {
+        float x = (d - headingDeg) * ppd;
+        int   dn = ((d % 360) + 360) % 360;
+        if (x < -half || x > half)
+            continue;
+
+        Ah_UseDim();
+        Ah_Line(x, cy, x, cy + ((dn % 10) == 0 ? 8.0f : 4.0f), s_th);
+        if ((dn % 30) == 0)
+        {
+            const char* lbl = buf;
+            switch (dn)
+            {
+                case 0:   lbl = "N"; break;
+                case 90:  lbl = "E"; break;
+                case 180: lbl = "S"; break;
+                case 270: lbl = "W"; break;
+                default:  snprintf(buf, sizeof(buf), "%02d", dn / 10); break;
+            }
+            Ah_UseMain();
+            Ah_Text(lbl, x, cy + 11.0f, 8.0f, 1);
+        }
+    }
+
+    Ah_UseMain();
+    snprintf(buf, sizeof(buf), "%03d", ((int)(headingDeg + 0.5f)) % 360);
+    Ah_Box(-17.0f, cy - 22.0f, 17.0f, cy - 6.0f, s_th);
+    Ah_Text(buf, 0.0f, cy - 18.5f, 9.0f, 1);
+    Ah_Line(0.0f, cy - 6.0f, -4.0f, cy - 1.0f, s_th);
+    Ah_Line(0.0f, cy - 6.0f,  4.0f, cy - 1.0f, s_th);
+}
+
+/* Vertical tape with a value box. side: -1 left, +1 right; ticks and labels
+ * face outward, the box sits on the inner edge. */
+static void Ah_Tape(float x, float value, float unitsPerTick, int labelEvery,
+                    const char* title, const char* boxText, int side)
+{
+    const float half = 80.0f, pp = 7.0f;
+    char  buf[12];
+    int   base = (int)floorf(value / unitsPerTick);
+    int   k;
+
+    for (k = base - 13; k <= base + 13; k++)
+    {
+        float v = k * unitsPerTick;
+        float y = -(v - value) / unitsPerTick * pp;
+        int   major = (labelEvery > 0) && (k % labelEvery) == 0;
+        if (y < -half || y > half)
+            continue;
+
+        Ah_UseDim();
+        Ah_Line(x, y, x + side * (major ? 9.0f : 5.0f), y, s_th);
+        if (major && fabsf(y) > 12.0f)
+        {
+            snprintf(buf, sizeof(buf), "%d", (int)v);
+            Ah_Text(buf, x + side * 12.0f, y - 3.5f, 7.0f, side < 0 ? 2 : 0);
+        }
+    }
+
+    Ah_UseDim();
+    Ah_Line(x, -half, x, half, s_th);
+
+    Ah_UseMain();
+    {
+        float w = Ah_TextWidth(boxText, 10.0f) + 10.0f;
+        float l = (side < 0) ? x + 4.0f : x - 4.0f - w;
+        Ah_Box(l, -9.0f, l + w, 9.0f, s_th);
+        Ah_Text(boxText, l + w * 0.5f, -5.0f, 10.0f, 1);
+    }
+    Ah_Text(title, x, -half - 14.0f, 8.0f, 1);
+}
+
+static void Ah_Boresight(void)
+{
+    Ah_UseMain();
+    Ah_Line(-16.0f, 0.0f, -8.0f, 0.0f, s_th);
+    Ah_Line(-8.0f, 0.0f, -4.0f, 6.0f, s_th);
+    Ah_Line(-4.0f, 6.0f, 0.0f, 0.0f, s_th);
+    Ah_Line(0.0f, 0.0f, 4.0f, 6.0f, s_th);
+    Ah_Line(4.0f, 6.0f, 8.0f, 0.0f, s_th);
+    Ah_Line(8.0f, 0.0f, 16.0f, 0.0f, s_th);
+}
+
+static void Ah_TargetsClassic(float nowS)
+{
+    const s_SubCharacter* pl = &g_SysWork.playerWork.player;
+    int i;
+
+    for (i = 0; i < NPC_COUNT_MAX; i++)
+    {
+        const s_SubCharacter* npc = &g_SysWork.npcs[i];
+        float wx, wy, wz, hx, hy, depth, dist, dx, dz, half;
+        char  buf[16];
+
+        if (!Ah_NpcLive(npc))
+            continue;
+
+        wx = Ah_Q12f(npc->position.vx + npc->collision.shapeOffsets.box.vx);
+        wz = Ah_Q12f(npc->position.vz + npc->collision.shapeOffsets.box.vz);
+        wy = Ah_Q12f(npc->position.vy + npc->collision.box.offsetY);
+        dx = wx - Ah_Q12f(pl->position.vx);
+        dz = wz - Ah_Q12f(pl->position.vz);
+        dist = sqrtf(dx * dx + dz * dz);
+        if (dist > AH_TARGET_RANGE)
+            continue;
+        if (!Ah_Project(wx, wy, wz, &hx, &hy, &depth))
+            continue;
+        if (hx < -s_w2 - 40.0f || hx > s_w2 + 40.0f || hy < -280.0f || hy > 280.0f)
+            continue;
+
+        half = 260.0f / depth;
+        if (half < 9.0f)  half = 9.0f;
+        if (half > 30.0f) half = 30.0f;
+
+        if (s_lockState[i] == 1 && fmodf(nowS, 0.3f) < 0.15f)
+            Ah_UseHi();
+        else
+            Ah_UseMain();
+
+        Ah_Box(hx - half, hy - half, hx + half, hy + half, s_th);
+
+        if (s_lockState[i] == 2)
+        {
+            float d = half + 7.0f;
+            Ah_Line(hx, hy - d, hx + d, hy, s_th);
+            Ah_Line(hx + d, hy, hx, hy + d, s_th);
+            Ah_Line(hx, hy + d, hx - d, hy, s_th);
+            Ah_Line(hx - d, hy, hx, hy - d, s_th);
+            half = d;
+        }
+
+        Ah_Text(Ah_EnemyName(npc->model.charaId), hx, hy - half - 10.0f, 6.5f, 1);
+        snprintf(buf, sizeof(buf), "%d", (int)(dist + 0.5f));
+        Ah_Text(buf, hx, hy + half + 4.0f, 6.5f, 1);
+    }
+}
+
+static void Ah_RadarClassic(float cx, float cy, float r, float yawTurns, float nowS)
+{
+    const s_SubCharacter* pl = &g_SysWork.playerWork.player;
+    float yaw = yawTurns * 2.0f * AH_PI;
+    float fx = sinf(yaw), fz = cosf(yaw);
+    float rx = cosf(yaw), rz = -sinf(yaw);
+    float px = Ah_Q12f(pl->position.vx), pz = Ah_Q12f(pl->position.vz);
+    int   i;
+
+    Ah_UseDim();
+    Ah_Circle(cx, cy, r, s_th, 40);
+    Ah_Circle(cx, cy, r * 0.5f, s_th * 0.7f, 28);
+    Ah_Line(cx, cy - r, cx, cy - r + 6.0f, s_th);
+
+    Ah_UseMain();
+    Ah_Tri(cx, cy - 6.0f, cx - 4.5f, cy + 4.0f, cx + 4.5f, cy + 4.0f);
+
+    for (i = 0; i < NPC_COUNT_MAX; i++)
+    {
+        const s_SubCharacter* npc = &g_SysWork.npcs[i];
+        float dx, dz, lx, ly, len, bx, by;
+        if (!Ah_NpcLive(npc))
+            continue;
+
+        dx  = Ah_Q12f(npc->position.vx) - px;
+        dz  = Ah_Q12f(npc->position.vz) - pz;
+        lx  = dx * rx + dz * rz;
+        ly  = dx * fx + dz * fz;
+        len = sqrtf(lx * lx + ly * ly);
+        if (len > AH_RADAR_RANGE)
+        {
+            lx *= AH_RADAR_RANGE / len;
+            ly *= AH_RADAR_RANGE / len;
+        }
+        bx = cx + lx / AH_RADAR_RANGE * (r - 3.0f);
+        by = cy - ly / AH_RADAR_RANGE * (r - 3.0f);
+
+        if (s_lockState[i] != 0 && fmodf(nowS, 0.3f) < 0.15f)
+            Ah_UseHi();
+        else
+            Ah_UseMain();
+        Ah_Rect(bx - 2.5f, by - 2.5f, bx + 2.5f, by + 2.5f);
+    }
+}
+
+static void Ah_WeaponLines(char* l1, char* l2, size_t n)
+{
+    int w = g_SavegamePtr->equippedWeapon;
+
+    snprintf(l1, n, "%s", Ah_WeaponName(w));
+    if (w == InvItemId_HyperBlaster)
+        snprintf(l2, n, "AMMO INF");
+    else if (w >= InvItemId_Handgun && w <= InvItemId_Shotgun)
+        snprintf(l2, n, "AMMO %d/%d", g_SysWork.playerCombat.currentWeaponAmmo,
+                 g_SysWork.playerCombat.totalWeaponAmmo);
+    else if (w >= InvItemId_KitchenKnife && w <= InvItemId_Axe)
+        snprintf(l2, n, "MELEE");
+    else
+        l2[0] = '\0';
+}
+
+static void Ah_FlareLine(float xRight, float y, float size)
+{
+    char buf[16];
+    float w;
+    snprintf(buf, sizeof(buf), "FLR %d", s_flareStock);
+    if (s_flareMsgT > 0.0f)
+        Ah_UseHi();
+    else
+        Ah_UseMain();
+    Ah_Text(buf, xRight, y, size, 2);
+
+    if (s_flareStock < AH_FLARE_MAX)
+    {
+        w = Ah_TextWidth(buf, size);
+        Ah_UseDim();
+        Ah_Rect(xRight - w, y + size + 3.0f,
+                xRight - w + w * (s_rechargeT / AH_FLARE_RECHARGE), y + size + 5.5f);
+    }
+}
+
+static void Ah_BuildHudClassic(float vpW, float vpH)
+{
+    const s_SubCharacter* pl = &g_SysWork.playerWork.player;
+    const int    touch  = Pc_Touch_IsDrivingInput();
+    const float  nowS   = (float)SDL_GetTicks() / 1000.0f;
+    const float  yawT   = Ah_Turns(pl->rotation.vy);
+    const float  hdg    = yawT * 360.0f;
+    const float  hp     = Ah_Q12f(pl->health);
+    float        dmg    = 100.0f - hp;
+    float        speedKmh = fabsf(Ah_Q12f(pl->moveSpeed)) * 3.6f;
+    float        altFt    = -Ah_Q12f(pl->position.vy) * 3.28f;
+    float        tapeX;
+    char         buf[48], l1[24], l2[24];
+
+    (void)vpH;
+    if (dmg < 0.0f)   dmg = 0.0f;
+    if (dmg > 100.0f) dmg = 100.0f;
+
+    s_th = 1.4f;
+
+    Ah_HeadingTape(hdg);
+
+    tapeX = s_w2 * 0.55f;
+    if (tapeX > 190.0f) tapeX = 190.0f;
+    snprintf(buf, sizeof(buf), "%d", (int)(speedKmh + 0.5f));
+    Ah_Tape(-tapeX, speedKmh, 1.0f, 5, "SPEED", buf, -1);
+    snprintf(l1, sizeof(l1), "%d", (int)floorf(altFt + 0.5f));
+    Ah_Tape(tapeX, altFt, 2.0f, 5, "ALT", l1, 1);
+
+    if (!(g_SysWork.playerCombat.isAiming && g_PcConfig.crosshair))
+        Ah_Boresight();
+
+    Ah_TargetsClassic(nowS);
+
+    Ah_UseMain();
+    {
+        Uint32 t = (Uint32)(g_SavegamePtr->gameplayTimer >> 12);
+        snprintf(buf, sizeof(buf), "TIME %02u:%02u:%02u", t / 3600u, (t / 60u) % 60u, t % 60u);
+        Ah_Text(buf, s_w2 - 18.0f, -222.0f, 8.0f, 2);
+        snprintf(buf, sizeof(buf), "SCORE %06d", Ah_Kills() * 1000);
+        Ah_Text(buf, s_w2 - 18.0f, -208.0f, 8.0f, 2);
+    }
+
+    Ah_WeaponLines(l1, l2, sizeof(l1));
+
+    if (!touch)
+    {
+        const float lx = -s_w2 + 20.0f;
+        const float rr = 50.0f;
+        const float rcx = s_w2 - 20.0f - rr, rcy = 170.0f;
+        const float wx  = rcx - rr - 14.0f;
+
+        Ah_UseMain();
+        Ah_Text("DMG", lx, 140.0f, 8.0f, 0);
+        snprintf(buf, sizeof(buf), "%d%%", (int)(dmg + 0.5f));
+        Ah_Text(buf, lx, 154.0f, 16.0f, 0);
+        Ah_UseDim();
+        Ah_Box(lx, 178.0f, lx + 110.0f, 186.0f, s_th);
+        Ah_UseMain();
+        Ah_Rect(lx + 2.0f, 180.0f, lx + 2.0f + 106.0f * (hp < 0.0f ? 0.0f : (hp > 100.0f ? 1.0f : hp / 100.0f)), 184.0f);
+
+        Ah_Text(l1, wx, 146.0f, 9.0f, 2);
+        if (l2[0])
+            Ah_Text(l2, wx, 162.0f, 9.0f, 2);
+        Ah_FlareLine(wx, 178.0f, 9.0f);
+
+        Ah_RadarClassic(rcx, rcy, rr, yawT, nowS);
+    }
+    else
+    {
+        /* Touch puts buttons in both bottom corners, so the panels collapse to
+         * one row in the free strip at the bottom centre. */
+        snprintf(buf, sizeof(buf), "DMG %d%%", (int)(dmg + 0.5f));
+        Ah_UseMain();
+        Ah_Text(buf, -12.0f, 214.0f, 8.0f, 2);
+        snprintf(buf, sizeof(buf), "%s %s", l1, l2);
+        Ah_Text(buf, 12.0f, 214.0f, 8.0f, 0);
+        Ah_FlareLine(Ah_TextWidth("FLR 4", 8.0f) * 0.5f, 198.0f, 8.0f);
+    }
+
+    if (s_alert && pl->health > Q12(0.0f))
+    {
+        if (fmodf(nowS, 0.5f) < 0.32f)
+        {
+            const float w = Ah_TextWidth("MISSILE ALERT", 20.0f) * 0.5f + 12.0f;
+            Ah_UseMain();
+            Ah_Text("MISSILE ALERT", 0.0f, -80.0f, 20.0f, 1);
+            Ah_Line(-w, -86.0f, w, -86.0f, s_th);
+            Ah_Line(-w, -52.0f, w, -52.0f, s_th);
+        }
+    }
+    else if (s_anyTrack)
+    {
+        Ah_UseMain();
+        Ah_Text("WARNING", 0.0f, -72.0f, 11.0f, 1);
+    }
+
+    if (s_flareMsgT > 0.0f && fmodf(nowS, 0.2f) < 0.13f)
+    {
+        Ah_UseHi();
+        Ah_Text("FLARE", 0.0f, 40.0f, 10.0f, 1);
+    }
+    else if (s_emptyMsgT > 0.0f)
+    {
+        Ah_UseMain();
+        Ah_Text("NO FLARES", 0.0f, 40.0f, 10.0f, 1);
+    }
+
+    (void)vpW;
+}
+
 static void Ah_BuildFlares(void)
 {
     static const float core[4] = { 1.0f, 1.0f, 0.95f, 1.0f };
@@ -1358,7 +1699,10 @@ void Pc_FlightHud_Draw(void)
     s_cur    = &s_glow;
     Ah_BuildFlares();
     s_cur = &s_hud;
-    Ah_BuildHud();
+    if (g_PcConfig.flightHud == 2)
+        Ah_BuildHudClassic(vpW, vpH);
+    else
+        Ah_BuildHud();
 
     glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);

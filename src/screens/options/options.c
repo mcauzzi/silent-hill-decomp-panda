@@ -241,6 +241,8 @@ static const char* const LBL_TOUCH[]  = { "Automatic", "Always_On", "Always_Off"
 static const int VAL_TSTYLE[] = { 0, 1 };
 static const char* const LBL_TSTYLE[] = { "Context", "Gamepad" };
 static const char* const LBL_WHZ[]    = { "30_Hz", "60_Hz" };
+static const int VAL_FHUD[]   = { 0, 1, 2 };
+static const char* const LBL_FHUD[]   = { "Off", "Modern", "Classic" };
 
 static const int RES_W[] = { 640, 1280, 1366, 1600, 1920, 2560, 3840 };
 static const int RES_H[] = { 480,  720,  768,  900, 1080, 1440, 2160 };
@@ -425,6 +427,10 @@ static const s_PcOpt PCOPT_H[] = {
     /* From the System page; a crosshair is HUD, and that page needed the room. */
     { "Crosshair",         &g_PcConfig.crosshair,          "crosshair",             VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
     { "Crosshair_Size",    NULL, "crosshair_size",         NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.crosshairSize, NULL, 25.0f, 125.0f, 5.0f },
+#if !defined(SH_IOS) && !defined(__ANDROID__)
+    /* The phone HUD page is already at the row ceiling; there it is on PCOPT_M. */
+    { "Flight_HUD",        &g_PcConfig.flightHud,          "flight_hud",            VAL_FHUD, 3, LBL_FHUD, NULL, 1, PCK_INT },
+#endif
     { "Prev_Page",         NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_PREV },
 #if defined(SH_IOS) || defined(__ANDROID__)
     /* Not the last page on a phone: PCOPT_M follows. */
@@ -444,6 +450,7 @@ static const s_PcOpt PCOPT_M[] = {
      * assignment it could take the slots ahead of a Bluetooth pad. */
     { "Controller",        NULL,                          "preferred_controller", NULL,      0, NULL,       NULL, 1, PCK_PAD },
     { "Bullet_Decals",     &g_PcConfig.bulletDecals,      "bullet_decals",       VAL_ONOFF,  2, LBL_ONOFF,  NULL, 1, PCK_INT },
+    { "Flight_HUD",        &g_PcConfig.flightHud,          "flight_hud",            VAL_FHUD, 3, LBL_FHUD, NULL, 1, PCK_INT },
     /* Mobile only, because a phone has no launcher: everywhere else the
      * launcher owns the account and the game just consumes its token. */
     { "Achievements",      NULL,                          NULL,                  NULL,       0, NULL,       NULL, 0, PCK_RALOGIN },
