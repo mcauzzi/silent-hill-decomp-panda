@@ -88,8 +88,8 @@ jobs:
           KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
-            mkdir -p "$HOME/.android"
-            printf '%s' "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+            echo "SH_DEBUG_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
             echo "Using the fixed debug key from secrets"
           else
             echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 not set: the APK gets a throwaway key and will not install over a previous build"
@@ -121,6 +121,9 @@ jobs:
             done
           done
           echo "both ABIs present"
+          # Same fingerprint every build = the fixed key; it changing means the
+          # APK will not install over the previous one.
+          "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --print-certs "$APK" | grep -i "SHA-256"
           echo "=== unstripped library sizes per ABI ==="
           find android_port/app/build/intermediates/cxx -name libmain.so -exec ls -la {} +
 

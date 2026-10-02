@@ -4,7 +4,8 @@ name: Release Android APK
 # build-android.yml does and publishes it as a GitHub release under that tag.
 # It can also be run by hand from the Actions tab, giving the tag to create.
 #
-# The APK is signed only by Gradle's debug keystore: fine for sideloading, but a
+# The APK is signed with the fixed debug key from ANDROID_DEBUG_KEYSTORE_B64 when
+# that secret is set (Gradle's throwaway debug key otherwise): fine for sideloading, but a
 # phone will not update over it from an APK signed with a different key.
 #
 # No game data is attached or ever built in. Players supply their own disc image.
@@ -82,8 +83,8 @@ jobs:
           KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
-            mkdir -p "$HOME/.android"
-            printf '%s' "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/debug.keystore"
+            echo "SH_DEBUG_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
             echo "Using the fixed debug key from secrets"
           else
             echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 not set: the APK gets a throwaway key and will not install over a previous build"
@@ -106,6 +107,9 @@ jobs:
               unzip -l "$APK" | grep -q "lib/$abi/$so" || { echo "MISSING lib/$abi/$so"; exit 1; }
             done
           done
+          # Same fingerprint every build = the fixed key; it changing means the
+          # APK will not install over the previous one.
+          "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --print-certs "$APK" | grep -i "SHA-256"
           cp "$APK" "SilentHill-android-$TAG.apk"
           sha256sum "SilentHill-android-$TAG.apk" > "SilentHill-android-$TAG.apk.sha256"
 
