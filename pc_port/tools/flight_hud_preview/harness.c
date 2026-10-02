@@ -42,6 +42,16 @@ static void enemy(int i, int id, float x, float z, float faceDeg)
     n->rotation.vy = (q3_12)(faceDeg / 360.0f * 4096.0f);
 }
 
+static void say(int face, int chara)
+{
+    int i;
+    for (i = 0; i < AH_RADIO_LINES; i++)
+        if (s_radioLines[i].face == face && (face == AH_FACE_CYBIL) == (s_radioLines[i].who != NULL))
+            break;
+    s_radioN = 1; s_radioQ[0] = i; s_radioChara[0] = chara;
+    s_radioT = AH_RADIO_TIME - 1.0f;
+}
+
 static void frame(float aspect, const char* path, int alert)
 {
     int k;
@@ -158,5 +168,14 @@ int main(int argc, char** argv)
     for (i = 0; i < 20; i++) Pc_FlightHud_Update();
     printf("debrief=%f rank=%c\n", s_debriefT, s_debrief.rank);
     frame(16.0f/9.0f, "debrief.txt", 0);
+
+    /* Comm portraits: Cybil, then a few monsters on the open channel. */
+    for (i = 0; i < 400; i++) Pc_FlightHud_Update();
+    for (i = 0; i < NPC_COUNT_MAX; i++) g_SysWork.npcs[i].model.charaId = 0;
+    say(AH_FACE_CYBIL, 0);       frame(16.0f/9.0f, "comm_cybil.txt", 0);
+    say(AH_FACE_DOG, Chara_Groaner);      frame(16.0f/9.0f, "comm_dog.txt", 0);
+    say(AH_FACE_BIRD, Chara_AirScreamer); frame(16.0f/9.0f, "comm_bird.txt", 0);
+    say(AH_FACE_BEAST, Chara_Creeper);    frame(16.0f/9.0f, "comm_beast.txt", 0);
+    say(AH_FACE_CHILD, Chara_GreyChild);  frame(16.0f/9.0f, "comm_child.txt", 0);
     return 0;
 }
