@@ -55,9 +55,7 @@
 #include "pc_quick_options.h"
 #include "pc_flight_hud.h"
 
-extern MATRIX VbWvsMatrix;
 extern long   ReadGeomScreen(void);
-extern void   vcGetNowCamPos(VECTOR3* cam_pos);
 extern int    PsyX_RawControllerBindHeld(int buttonOrAxis);
 extern int    g_PcConsoleInputActive;
 extern GLuint GR_ScreenReadFBO(void);
@@ -1166,7 +1164,6 @@ static void Ah_Text(const char* s, float x, float y, float size, int align)
 /* Projection                                                          */
 /* ------------------------------------------------------------------ */
 
-static VECTOR3 s_cam;
 static float   s_camH;
 /* Projected PSX offsets from the picture centre -> HUD units:
  * h = s_c + p * s_k. Taken from the ortho the world pass really used, so the
@@ -1204,12 +1201,13 @@ static void Ah_ScreenMap(float aspect)
 
 static void Ah_View(float wx, float wy, float wz, float* vx, float* vy, float* vz)
 {
-    float dx = wx - Ah_Q12f(s_cam.vx);
-    float dy = wy - Ah_Q12f(s_cam.vy);
-    float dz = wz - Ah_Q12f(s_cam.vz);
-    *vx = (VbWvsMatrix.m[0][0] * dx + VbWvsMatrix.m[0][1] * dy + VbWvsMatrix.m[0][2] * dz) / 4096.0f;
-    *vy = (VbWvsMatrix.m[1][0] * dx + VbWvsMatrix.m[1][1] * dy + VbWvsMatrix.m[1][2] * dz) / 4096.0f;
-    *vz = (VbWvsMatrix.m[2][0] * dx + VbWvsMatrix.m[2][1] * dy + VbWvsMatrix.m[2][2] * dz) / 4096.0f;
+    /* The matrix the world was drawn with: the port's own cameras (TPS, OTS,
+     * FPS) set it, while vcGetNowCamPos keeps reporting the game's camera. */
+    const MATRIX* m = &GsWSMATRIX;
+
+    *vx = ((m->m[0][0] * wx + m->m[0][1] * wy + m->m[0][2] * wz) / 16.0f + m->t[0]) / 256.0f;
+    *vy = ((m->m[1][0] * wx + m->m[1][1] * wy + m->m[1][2] * wz) / 16.0f + m->t[1]) / 256.0f;
+    *vz = ((m->m[2][0] * wx + m->m[2][1] * wy + m->m[2][2] * wz) / 16.0f + m->t[2]) / 256.0f;
 }
 
 /* World (m, game axes) -> HUD units. Returns 0 behind the camera. *outDepth is
@@ -3588,7 +3586,6 @@ void Pc_FlightHud_Draw(void)
     s_w2    = 240.0f * aspect;
     s_camH  = (float)ReadGeomScreen();
     Ah_ScreenMap(aspect);
-    vcGetNowCamPos(&s_cam);
     if (s_camH < 1.0f)
         s_camH = 1.0f;
 
