@@ -152,6 +152,7 @@ static const QoRowDef s_page1[] = {
     { ROW_OPT,   "crosshair",            0, NULL },
     { ROW_OPT,   "crosshair_size",       0, NULL },
     { ROW_OPT,   "low_health_glow",      0, NULL },
+    { ROW_OPT,   "flight_hud",           0, NULL },
 /* Not on mobile: it would not do anything. PsyX_SPUAL_SetOutputMode is an
  * empty stub on the software backend and GetOutputMode always answers
  * stereo -- the only surround path for the software SPU is audio_spatial,

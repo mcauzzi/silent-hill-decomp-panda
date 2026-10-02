@@ -1039,7 +1039,10 @@ void PcConfig_Load(const char* path)
         }
         else if (strcmp(key, "flight_hud") == 0)
         {
-            g_PcConfig.flightHud = (atoi(value) != 0);
+            int v = atoi(value);
+            if (v < 0) v = 0;
+            if (v > 2) v = 2;
+            g_PcConfig.flightHud = v;
         }
         else if (strcmp(key, "flight_hud_sound") == 0)
         {
