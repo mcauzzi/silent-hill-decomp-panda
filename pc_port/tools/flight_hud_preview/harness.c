@@ -16,6 +16,7 @@ int g_PcConsoleInputActive, g_PcQuickOptionsActive;
 static int s_touch;
 long ReadGeomScreen(void) { return 256; }
 void vcGetNowCamPos(VECTOR3* c) { c->vx = 0; c->vy = Q12(-1.7f); c->vz = Q12(-4.0f); }
+s32 Pc_WorldAnchorOfy(void) { return 8; }
 int PsyX_RawControllerBindHeld(int b) { return 0; }
 int Pc_Touch_IsDrivingInput(void) { return s_touch; }
 void SD_Call(u32 c) {}
