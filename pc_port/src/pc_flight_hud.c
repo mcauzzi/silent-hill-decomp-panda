@@ -1649,9 +1649,6 @@ static struct
 
 /* The 3D comm portrait asked for by the radio box (see Ah_Portrait3dPass). */
 static int   s_p3dKey = -1, s_p3dMonster;
-static float s_p3dRect[4];  /* HUD units: l, t, r, b */
-static int   s_p3dDrawn = -1;
-static float s_p3dDrawnRect[4];
 
 static int Ah_PortraitKey(int charaId)
 {
@@ -1744,10 +1741,6 @@ static void Ah_Portrait(float l, float t, float size, int face, int chara, int m
     {
         s_p3dKey     = chara;
         s_p3dMonster = monster;
-        s_p3dRect[0] = l;
-        s_p3dRect[1] = t;
-        s_p3dRect[2] = l + size;
-        s_p3dRect[3] = t + size;
     }
     if (age >= 0.25f && chara >= 0 && s_portTex[chara])
     {
@@ -3028,92 +3021,326 @@ static void Ah_PortraitDraw(float nowS)
 }
 
 /* ------------------------------------------------------------------ */
-/* 3D comm portrait: the speaker's own model through a second camera   */
+/* 3D comm portrait: the speaker's model, converted and drawn here     */
 /* ------------------------------------------------------------------ */
 
-/* The game draws everything through one world->screen matrix, so a second
- * camera is just a second matrix: for one character, swap in a portrait view
- * aimed at its head, move the projection centre onto the radio box, and draw
- * its skeleton again with the game's own character renderer. Its prims go to
- * a private ordering table spliced in after the world, and the post-capture
- * draw copies the box out of the frame into the portrait texture.
+/* The radio portrait as the speaker's own model, drawn by this module into the
+ * portrait texture with its own camera, depth buffer and light: nothing passes
+ * through the game's renderer, so nothing can spill out of the box.
  *
- * A monster that is in the scene is shown in its live pose (the per-type bone
- * array the AI just posed). Anyone else, Cybil above all, is a puppet: the
- * global chara pool keeps every model and animation resident, so the puppet is
- * posed from the first keyframe of its own animation file. Without the pool
- * entry there is nothing to draw and the captured close-up stands in. */
+ * SH1 characters are rigid parts, one per bone, no skinning. The global chara
+ * pool keeps every character's model, animation and texture resident, so the
+ * conversion is done on the fly every frame, mirroring the game's own draw:
+ *  - parts in skeleton order, each part's vertices taken from its bone frame
+ *    into world space (R*v/4096 + T) and written into a shared vertex pool at
+ *    ModelHeader.vertexOffset; prims index that POOL, which is how a part
+ *    picks up the already-placed seam vertices of its neighbour (see
+ *    pc_port/tools/ilm_obj.py, resolve_pool);
+ *  - each prim's tpage/clut is looked up the same way the renderer finds the
+ *    pool's GL textures (HiresOverride_LookupByTpageClut), with the PSX UVs
+ *    mapped into the native TIM;
+ *  - the pose is the live NPC's when the speaker is in the scene, else the
+ *    first keyframe of its pool animation. */
 
 #define AH_P3D_MAX_BONES 57
-#define AH_P3D_MAX_PRIMS 6144
+#define AH_P3D_POOL      256
+#define AH_P3D_MAX_TRIS  4096
+#define AH_P3D_FLOATS    8       /* pos3, uv2, normal3 */
+#define AH_P3D_TEXCACHE  32
 
-extern int  g_PcPortraitCullActive;
-extern s32  g_PcPortraitCullViewY;
-extern void ReadGeomOffset(s32* ofx, s32* ofy);
-extern void Math_MatrixTransform(VECTOR3* pos, SVECTOR* rot, GsCOORDINATE2* coord);
-extern s_WorldEnvWork g_WorldEnvWork;
+extern void* Pc_CharaPool_ModelOf(int charaId);
+extern void  Math_MatrixTransform(VECTOR3* pos, SVECTOR* rot, GsCOORDINATE2* coord);
+extern int   Pc_WideLm_IsWide(const s_ModelHeader* modelHdr);
+#include "hires_override.h"
 
-static GsOT          s_p3dOt[2];
-static GsOT_TAG      s_p3dTags[2][ORDERING_TABLE_SIZE];
-static POLY_F4       s_p3dBg[2];
 static GsCOORDINATE2 s_p3dCoords[AH_P3D_MAX_BONES];
 static int           s_p3dPuppetKey = -1;
+static float         s_p3dVerts[AH_P3D_MAX_TRIS * 3 * AH_P3D_FLOATS];
 
-void Pc_FlightHud_Portrait3dPass(void)
+typedef struct
 {
-    const int      buf = g_ActiveBufferIdx;
-    const int      key = s_p3dKey;
-    s_CharaModel*  model;
-    GsCOORDINATE2* coords = NULL;
-    s_AnmHeader*   anm    = NULL;
-    float          yaw    = 0.0f;
-    int            i, nb;
-    s32            minY = 0x7FFFFFFF, maxY = -0x7FFFFFFF, h, topN = 0;
-    s32            sumX = 0, sumZ = 0;
-    s32            tX, tY, tZ, half, dist, hp;
-    MATRIX         saveVb, saveWs, saveD, m;
-    s32            ofx, ofy;
-    long           saveH;
-    GsCOORDINATE2  cam;
-    SVECTOR        dir, rot;
-    float          a;
-    float          boxL, boxT, boxR, boxB;
-    extern float   g_PcHudRect[4];
+    GLuint tex;
+    int    first, count; /* vertices in s_p3dVerts */
+} s_AhP3dBatch;
 
-    s_p3dDrawn = -1;
-    if (!Pc_FlightHud_Enabled() || !g_PcConfig.flightHudPortrait3d || !Ah_InGameplay() || key < 0)
+static s_AhP3dBatch s_p3dBatches[AH_P3D_MAX_TRIS];
+static int          s_p3dBatchN;
+
+static GLuint s_mdlProg, s_mdlVao, s_mdlVbo, s_mdlFbo, s_mdlDepth;
+static GLint  s_mdlLocMvp, s_mdlLocTex, s_mdlLocTint, s_mdlLocLight, s_mdlLocAmb;
+static int    s_mdlReady;
+
+static void Ah_ModelGlInit(void)
+{
+    static const char* vs_src =
+        "attribute vec3 a_pos;\n"
+        "attribute vec2 a_uv;\n"
+        "attribute vec3 a_nrm;\n"
+        "uniform mat4 u_mvp;\n"
+        "varying vec2 v_uv;\n"
+        "varying vec3 v_nrm;\n"
+        "void main() {\n"
+        "    v_uv = a_uv;\n"
+        "    v_nrm = a_nrm;\n"
+        "    gl_Position = u_mvp * vec4(a_pos, 1.0);\n"
+        "}\n";
+    static const char* fs_src =
+        "#ifdef GL_ES\n"
+        "precision mediump float;\n"
+        "#endif\n"
+        "varying vec2 v_uv;\n"
+        "varying vec3 v_nrm;\n"
+        "uniform sampler2D u_tex;\n"
+        "uniform vec3 u_light;\n"
+        "uniform float u_amb;\n"
+        "uniform vec4 u_tint;\n"
+        "void main() {\n"
+        "    vec4 t = texture2D(u_tex, v_uv);\n"
+        "    if (t.a < 0.5) discard;\n"
+        "    vec3 n = normalize(v_nrm);\n"
+        "    float d = abs(dot(n, u_light));\n"
+        "    float rim = pow(1.0 - abs(n.z), 3.0);\n"
+        "    vec3 c = t.rgb * (u_amb + (1.0 - u_amb) * d) * 1.25 + rim * 0.35 * u_tint.rgb;\n"
+        "    gl_FragColor = vec4(c, 1.0);\n"
+        "}\n";
+    GLuint vs, fs;
+    GLint  ok = 0, prevVao = 0, prevBuf = 0;
+
+    s_mdlReady = -1;
+    vs = Ah_Shader(GL_VERTEX_SHADER, vs_src);
+    fs = Ah_Shader(GL_FRAGMENT_SHADER, fs_src);
+    if (!vs || !fs)
         return;
-
-    model = g_WorldGfxWork.registeredCharaModels[key];
-    if (model == NULL || !model->isLoaded || model->skeleton.bones_4 == NULL)
-        return;
-
+    s_mdlProg = glCreateProgram();
+    glAttachShader(s_mdlProg, vs);
+    glAttachShader(s_mdlProg, fs);
+    glBindAttribLocation(s_mdlProg, 0, "a_pos");
+    glBindAttribLocation(s_mdlProg, 1, "a_uv");
+    glBindAttribLocation(s_mdlProg, 2, "a_nrm");
+    glLinkProgram(s_mdlProg);
+    glGetProgramiv(s_mdlProg, GL_LINK_STATUS, &ok);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    if (!ok)
     {
-        const int idx = g_CharaAnimDataIdxs[key];
+        glDeleteProgram(s_mdlProg);
+        s_mdlProg = 0;
+        return;
+    }
+    s_mdlLocMvp   = glGetUniformLocation(s_mdlProg, "u_mvp");
+    s_mdlLocTex   = glGetUniformLocation(s_mdlProg, "u_tex");
+    s_mdlLocTint  = glGetUniformLocation(s_mdlProg, "u_tint");
+    s_mdlLocLight = glGetUniformLocation(s_mdlProg, "u_light");
+    s_mdlLocAmb   = glGetUniformLocation(s_mdlProg, "u_amb");
 
-        for (i = 0; i < NPC_COUNT_MAX && idx >= 0 && idx < CHARA_ANIM_DATA_COUNT; i++)
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevBuf);
+    glGenVertexArrays(1, &s_mdlVao);
+    glBindVertexArray(s_mdlVao);
+    glGenBuffers(1, &s_mdlVbo);
+    glBindBuffer(GL_ARRAY_BUFFER, s_mdlVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(s_p3dVerts), NULL, GL_STREAM_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, AH_P3D_FLOATS * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, AH_P3D_FLOATS * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, AH_P3D_FLOATS * sizeof(float), (void*)(5 * sizeof(float)));
+    glBindVertexArray((GLuint)prevVao);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)prevBuf);
+
+    glGenFramebuffers(1, &s_mdlFbo);
+    glGenRenderbuffers(1, &s_mdlDepth);
+    s_mdlReady = 1;
+}
+
+typedef struct
+{
+    int    tpage, clut;
+    GLuint tex;
+    float  su, sv, ou, ov;
+} s_AhTexCache;
+
+static GLuint Ah_ModelTex(s_AhTexCache* cache, int* n, int tpage, int clut, float* su, float* sv, float* ou, float* ov)
+{
+    int    i, nw = 0, nh = 0, ox = 0, oy = 0, hw = 0, hh = 0;
+    GLuint t;
+
+    for (i = 0; i < *n; i++)
+    {
+        if (cache[i].tpage == tpage && cache[i].clut == clut)
         {
-            const s_SubCharacter* npc = &g_SysWork.npcs[i];
-            if (Ah_PortraitKey(npc->model.charaId) != key || npc->health <= Q12(0.0f) ||
-                !(npc->model.anim.flags & AnimFlag_Visible))
-                continue;
-            if (g_CharaModelAnimsData[idx].boneCoords == NULL || g_CharaModelAnimsData[idx].activeAnmHdr == NULL)
-                break;
-            coords = g_CharaModelAnimsData[idx].boneCoords;
-            anm    = g_CharaModelAnimsData[idx].activeAnmHdr;
-            yaw    = Ah_Turns(npc->rotation.vy) * 2.0f * AH_PI;
-            break;
+            *su = cache[i].su; *sv = cache[i].sv; *ou = cache[i].ou; *ov = cache[i].ov;
+            return cache[i].tex;
         }
     }
+    t = HiresOverride_LookupByTpageClut(tpage, clut, &nw, &nh, &ox, &oy, &hw, &hh);
+    if (t == 0 || nw <= 0 || nh <= 0)
+        return 0;
+    *su = 1.0f / (float)nw;
+    *sv = 1.0f / (float)nh;
+    *ou = (float)ox + 0.5f;
+    *ov = (float)oy + 0.5f;
+    if (*n < AH_P3D_TEXCACHE)
+    {
+        cache[*n].tpage = tpage; cache[*n].clut = clut; cache[*n].tex = t;
+        cache[*n].su = *su; cache[*n].sv = *sv; cache[*n].ou = *ou; cache[*n].ov = *ov;
+        (*n)++;
+    }
+    return t;
+}
 
+/* Converts the posed model into s_p3dVerts / s_p3dBatches, world units in
+ * metres (game axes, +Y down). Returns the triangle count. */
+static int Ah_ModelBuild(const s_CharaModel* model, GsCOORDINATE2* coords, int boneCount)
+{
+    static float vpool[AH_P3D_POOL][3], npool[AH_P3D_POOL][3];
+    s_AhTexCache cache[AH_P3D_TEXCACHE];
+    int          cacheN = 0, tris = 0;
+    const s_LinkedBone* lb;
+
+    s_p3dBatchN = 0;
+    memset(vpool, 0, sizeof(vpool));
+    memset(npool, 0, sizeof(npool));
+
+    for (lb = model->skeleton.bones_4; lb != NULL; lb = lb->next)
+    {
+        const s_ModelHeader* mh = lb->bone.modelInfo.modelHdr;
+        const int            bi = (u8)lb->bone.idx;
+        MATRIX               W;
+        float                R[9], T[3];
+        int                  k;
+
+        if (lb->bone.modelInfo.field_0 < 0 || mh == NULL || bi >= boneCount || Pc_WideLm_IsWide(mh))
+            continue;
+
+        Vw_CoordHierarchyMatrixCompute(&coords[bi], &W);
+        for (k = 0; k < 9; k++)
+            R[k] = (float)W.m[k / 3][k % 3] / 4096.0f;
+        T[0] = (float)W.t[0]; T[1] = (float)W.t[1]; T[2] = (float)W.t[2];
+
+        for (k = 0; k < mh->meshCount; k++)
+        {
+            const s_MeshHeader* me = &mh->meshHdrs[k];
+            int j, p;
+
+            for (j = 0; j < me->vertexCount && mh->vertexOffset + j < AH_P3D_POOL; j++)
+            {
+                const float x = me->verticesXy[j].vx, y = me->verticesXy[j].vy, z = me->verticesZ[j];
+                float* o = vpool[mh->vertexOffset + j];
+                o[0] = (R[0] * x + R[1] * y + R[2] * z + T[0]) / 256.0f;
+                o[1] = (R[3] * x + R[4] * y + R[5] * z + T[1]) / 256.0f;
+                o[2] = (R[6] * x + R[7] * y + R[8] * z + T[2]) / 256.0f;
+            }
+            for (j = 0; j < me->normalCount && mh->normalOffset + j < AH_P3D_POOL; j++)
+            {
+                /* Stored pointing inward. */
+                const float x = -me->normals[j].nx, y = -me->normals[j].ny, z = -me->normals[j].nz;
+                float* o = npool[mh->normalOffset + j];
+                o[0] = R[0] * x + R[1] * y + R[2] * z;
+                o[1] = R[3] * x + R[4] * y + R[5] * z;
+                o[2] = R[6] * x + R[7] * y + R[8] * z;
+            }
+
+            for (p = 0; p < me->primitiveCount; p++)
+            {
+                static const int quadTris[6] = { 0, 1, 2, 1, 3, 2 };
+                const s_Primitive* pr = &me->primitives[p];
+                const u16 uvw[4] = { pr->field_0, pr->field_4, pr->field_8, pr->field_A };
+                const int quad = pr->field_C[3] != 0xFF;
+                const int nIdx = quad ? 6 : 3;
+                float     su, sv, ou, ov;
+                GLuint    tex;
+                int       c;
+
+                tex = Ah_ModelTex(cache, &cacheN, pr->field_6.bits.field_6_0, pr->field_2, &su, &sv, &ou, &ov);
+                if (tex == 0 || tris + (quad ? 2 : 1) > AH_P3D_MAX_TRIS)
+                    continue;
+
+                if (s_p3dBatchN == 0 || s_p3dBatches[s_p3dBatchN - 1].tex != tex)
+                {
+                    s_p3dBatches[s_p3dBatchN].tex   = tex;
+                    s_p3dBatches[s_p3dBatchN].first = tris * 3;
+                    s_p3dBatches[s_p3dBatchN].count = 0;
+                    s_p3dBatchN++;
+                }
+
+                for (c = 0; c < nIdx; c++)
+                {
+                    const int   corner = quad ? quadTris[c] : c;
+                    const int   vi = pr->field_C[corner], ni = pr->field_10[corner];
+                    float*      o = &s_p3dVerts[(tris * 3 + c) * AH_P3D_FLOATS];
+                    const float* v = vpool[vi < AH_P3D_POOL ? vi : 0];
+                    const float* nn = npool[ni < AH_P3D_POOL ? ni : 0];
+
+                    o[0] = v[0]; o[1] = v[1]; o[2] = v[2];
+                    o[3] = ((float)(uvw[corner] & 0xFF) + ou) * su;
+                    o[4] = ((float)(uvw[corner] >> 8) + ov) * sv;
+                    o[5] = nn[0]; o[6] = nn[1]; o[7] = nn[2];
+                }
+                tris += quad ? 2 : 1;
+                s_p3dBatches[s_p3dBatchN - 1].count += nIdx;
+            }
+        }
+    }
+    return tris;
+}
+
+static void Ah_Mat4Mul(float* o, const float* a, const float* b)
+{
+    int r, c, k;
+    for (c = 0; c < 4; c++)
+        for (r = 0; r < 4; r++)
+        {
+            float s = 0.0f;
+            for (k = 0; k < 4; k++)
+                s += a[k * 4 + r] * b[c * 4 + k];
+            o[c * 4 + r] = s;
+        }
+}
+
+/* Renders the speaker into s_portTex[key]. Returns 1 on success. */
+static int Ah_ModelPortraitRender(int key, int monster, float nowS)
+{
+    const s_CharaModel* model = (const s_CharaModel*)Pc_CharaPool_ModelOf(key);
+    GsCOORDINATE2* coords = NULL;
+    s_AnmHeader*   anm    = NULL;
+    float          yaw = 0.0f, minY = 1e9f, maxY = -1e9f, h, half, dist, a;
+    float          tx = 0.0f, tz = 0.0f, ty, ex, ey, ez, fx, fy, fz, rx, ry, rz, ux, uy, uz, l;
+    float          view[16], proj[16], mvp[16], fov;
+    int            i, nb, tris, topN = 0;
+    GLint          prevRead = 0, prevDraw = 0, prevVp[4], prevProg = 0, prevVao = 0, prevBuf = 0, prevTex = 0, prevUnit = 0;
+    GLint          prevDepthFunc = GL_LESS;
+    GLboolean      prevDepth, prevBlend, prevCull, prevScissor, prevDepthMask = GL_TRUE;
+    GLfloat        prevClear[4];
+    MATRIX         m;
+
+    if (model == NULL || model->lmHdr == NULL || model->skeleton.bones_4 == NULL)
+        return 0;
+
+    /* Pose: the speaker's live skeleton if it is in the scene and posed by the
+     * pool's own animation (the bone layout must match the pool model). */
+    for (i = 0; i < NPC_COUNT_MAX; i++)
+    {
+        const s_SubCharacter* npc = &g_SysWork.npcs[i];
+        const int idx = g_CharaAnimDataIdxs[key];
+        if (Ah_PortraitKey(npc->model.charaId) != key || npc->health <= Q12(0.0f) ||
+            !(npc->model.anim.flags & AnimFlag_Visible) || idx < 0 || idx >= CHARA_ANIM_DATA_COUNT ||
+            g_CharaModelAnimsData[idx].boneCoords == NULL || g_CharaModelAnimsData[idx].activeAnmHdr == NULL)
+            continue;
+        coords = g_CharaModelAnimsData[idx].boneCoords;
+        anm    = g_CharaModelAnimsData[idx].activeAnmHdr;
+        yaw    = Ah_Turns(npc->rotation.vy) * 2.0f * AH_PI;
+        break;
+    }
     if (coords == NULL)
     {
-        VECTOR3 pos = g_SysWork.playerWork.player.position;
+        VECTOR3 pos  = { 0, 0, 0 };
         SVECTOR prot = { 0, 0, 0 };
 
         anm = g_CharaModelAnimsData[PC_CHARA_ANIM_SLOT(key)].activeAnmHdr;
         if (anm == NULL || anm->boneCount == 0 || anm->boneCount > AH_P3D_MAX_BONES || anm->keyframeCount == 0)
-            return;
+            return 0;
         if (s_p3dPuppetKey != key)
         {
             Anim_BoneInit(anm, s_p3dCoords);
@@ -3125,208 +3352,177 @@ void Pc_FlightHud_Portrait3dPass(void)
         Anim_BoneUpdate(anm, s_p3dCoords, 0, anm->keyframeCount > 1 ? 1 : 0, Q12(0.0f));
         coords = s_p3dCoords;
     }
-
     nb = anm->boneCount;
     if (nb <= 0 || nb > AH_P3D_MAX_BONES)
-        return;
+        return 0;
+
+    tris = Ah_ModelBuild(model, coords, nb);
+    if (tris == 0)
+        return 0;
 
     /* Frame on the top of the body: the head on anything upright, the front of
      * the body on anything that is not. */
     for (i = 0; i < nb; i++)
     {
         Vw_CoordHierarchyMatrixCompute(&coords[i], &m);
-        if (m.t[1] < minY) minY = m.t[1];
-        if (m.t[1] > maxY) maxY = m.t[1];
+        if (m.t[1] / 256.0f < minY) minY = m.t[1] / 256.0f;
+        if (m.t[1] / 256.0f > maxY) maxY = m.t[1] / 256.0f;
     }
     h = maxY - minY;
-    if (h < Q8(0.3f))
-        h = Q8(0.3f);
+    if (h < 0.3f) h = 0.3f;
     for (i = 0; i < nb; i++)
     {
         Vw_CoordHierarchyMatrixCompute(&coords[i], &m);
-        if (m.t[1] <= minY + (h * 3) / 10)
+        if (m.t[1] / 256.0f <= minY + h * 0.3f)
         {
-            sumX += m.t[0];
-            sumZ += m.t[2];
+            tx += m.t[0] / 256.0f;
+            tz += m.t[2] / 256.0f;
             topN++;
         }
     }
     if (topN == 0)
-        return;
-    tX = sumX / topN;
-    tZ = sumZ / topN;
-    tY = minY + h / 5;
+        return 0;
+    tx /= topN;
+    tz /= topN;
+    ty = minY + h * 0.2f;
+    half = h * 0.24f;
+    if (half < 0.22f) half = 0.22f;
+    if (half > 0.8f)  half = 0.8f;
+    dist = half * 4.0f;
 
-    half = (h * 22) / 100;
-    if (half < Q8(0.20f)) half = Q8(0.20f);
-    if (half > Q8(0.75f)) half = Q8(0.75f);
-    dist = (half * 46) / 10;
+    /* Three-quarter view a little above the eyes, with a slow idle drift. */
+    a  = yaw + 0.45f + 0.12f * sinf(nowS * 0.6f);
+    ex = tx + sinf(a) * dist;
+    ez = tz + cosf(a) * dist;
+    ey = ty - dist * 0.08f;
 
-    /* OT2 is drawn in the UI pass, whose screen space is g_PcHudRect (centre
-     * origin, the same frame the touch controls and minimap place against),
-     * not the world's. Map the HUD-unit box into it. */
+    /* Look-at, world +Y is down so "up" is -Y. */
+    fx = tx - ex; fy = ty - ey; fz = tz - ez;
+    l  = sqrtf(fx * fx + fy * fy + fz * fz); fx /= l; fy /= l; fz /= l;
+    rx = fy * 0.0f - fz * -1.0f; ry = fz * 0.0f - fx * 0.0f; rz = fx * -1.0f - fy * 0.0f;
+    l  = sqrtf(rx * rx + ry * ry + rz * rz); rx /= l; ry /= l; rz /= l;
+    ux = ry * fz - rz * fy; uy = rz * fx - rx * fz; uz = rx * fy - ry * fx;
+    view[0] = rx; view[4] = ry; view[8]  = rz; view[12] = -(rx * ex + ry * ey + rz * ez);
+    view[1] = ux; view[5] = uy; view[9]  = uz; view[13] = -(ux * ex + uy * ey + uz * ez);
+    view[2] = -fx; view[6] = -fy; view[10] = -fz; view[14] = (fx * ex + fy * ey + fz * ez);
+    view[3] = 0.0f; view[7] = 0.0f; view[11] = 0.0f; view[15] = 1.0f;
+
+    fov = 2.0f * atanf(half / dist);
     {
-        const float uw = g_PcHudRect[1] - g_PcHudRect[0], uh = g_PcHudRect[3] - g_PcHudRect[2];
-        if (uw <= 1.0f || uh <= 1.0f || s_w2 <= 1.0f)
-            return;
-        boxL = g_PcHudRect[0] + (s_p3dRect[0] / s_w2 * 0.5f + 0.5f) * uw;
-        boxR = g_PcHudRect[0] + (s_p3dRect[2] / s_w2 * 0.5f + 0.5f) * uw;
-        boxT = g_PcHudRect[2] + (s_p3dRect[1] / 480.0f + 0.5f) * uh;
-        boxB = g_PcHudRect[2] + (s_p3dRect[3] / 480.0f + 0.5f) * uh;
+        const float f = 1.0f / tanf(fov * 0.5f), zn = 0.05f, zf = 50.0f;
+        memset(proj, 0, sizeof(proj));
+        proj[0]  = f;
+        proj[5]  = f;
+        proj[10] = (zf + zn) / (zn - zf);
+        proj[11] = -1.0f;
+        proj[14] = (2.0f * zf * zn) / (zn - zf);
     }
+    Ah_Mat4Mul(mvp, proj, view);
 
-    /* Three-quarter view, a little above the eyes. */
-    a = yaw + 0.42f;
-    cam.flg          = 0;
-    cam.super        = NULL;
-    cam.coord.t[0]   = tX + (s32)(sinf(a) * dist);
-    cam.coord.t[1]   = tY - dist / 12;
-    cam.coord.t[2]   = tZ + (s32)(cosf(a) * dist);
-    dir.vx = (s16)(tX - cam.coord.t[0]);
-    dir.vy = (s16)(tY - cam.coord.t[1]);
-    dir.vz = (s16)(tZ - cam.coord.t[2]);
-    vwVectorToAngle(&rot, &dir);
-    Math_RotMatrixZxyNegGte(&rot, &cam.coord);
-
-    saveVb = VbWvsMatrix;
-    saveWs = GsWSMATRIX;
-    saveD  = D_800C3868;
-    ReadGeomOffset(&ofx, &ofy);
-    saveH = ReadGeomScreen();
-
-    vbSetWorldScreenMatrix(&cam);
-    SetGeomOffset((int)((boxL + boxR) * 0.5f), (int)((boxT + boxB) * 0.5f));
-    hp = (s32)(((boxB - boxT) * 0.5f) * (float)dist / (float)half);
-    if (hp < 8) hp = 8;
-    SetGeomScreen(hp);
-
-    if (s_p3dOt[buf].org == NULL)
-    {
-        s_p3dOt[buf].length = 11;
-        s_p3dOt[buf].org    = s_p3dTags[buf];
-        setPolyF4(&s_p3dBg[buf]);
-    }
-    GsClearOt(0, 0, &s_p3dOt[buf]);
-
-    setXY4(&s_p3dBg[buf], (short)boxL, (short)boxT, (short)boxR, (short)boxT,
-           (short)boxL, (short)boxB, (short)boxR, (short)boxB);
-    setRGB0(&s_p3dBg[buf], 6, 18, 10);
-    AddPrim(&s_p3dOt[buf].org[ORDERING_TABLE_SIZE - 1], &s_p3dBg[buf]);
-
-    g_PcPortraitCullActive = 1;
-    g_PcPortraitCullViewY  = half + half / 2;
-    /* No fog on a comm screen. It would also add the renderer's fog quad, sized
-     * to every bone including the culled ones, spilling out under the box. */
-    {
-        const u8 fog = g_WorldEnvWork.isFogEnabled;
-        g_WorldEnvWork.isFogEnabled = 0;
-        extern int   g_PsyX_NoShadowCast;
-        extern float g_PsyX_CharaFade;
-        g_PsyX_NoShadowCast = 1;
-        g_PsyX_CharaFade    = 0.0f;
-        func_80045534(&model->skeleton, &s_p3dOt[buf], 1, coords, Q8_TO_Q12(CHARA_FILE_INFOS[key].field_6),
-                      func_8003DD74(key, 0), CHARA_FILE_INFOS[key].field_8);
-        g_PsyX_NoShadowCast = 0;
-        g_WorldEnvWork.isFogEnabled = fog;
-    }
-    g_PcPortraitCullActive = 0;
-
-    VbWvsMatrix = saveVb;
-    GsWSMATRIX  = saveWs;
-    D_800C3868  = saveD;
-    SetGeomOffset(ofx, ofy);
-    SetGeomScreen((int)saveH);
-
-    /* Hand the prims to OT2, the 2D layer drawn over the world. Not the whole
-     * table: the renderer gives each empty bucket of the table being drawn a
-     * depth step, and 2048 foreign buckets would run OT2's 16 off the end. The
-     * prims are relinked far-to-near into one chain behind OT2's head bucket,
-     * keeping the painter's order the character renderer gave them. */
-    {
-        static P_TAG* prims[AH_P3D_MAX_PRIMS];
-        GsOT_TAG*     head = &g_OrderingTable2[buf].org[(1 << g_OrderingTable2[buf].length) - 1];
-        uintptr_t     p    = (uintptr_t)s_p3dOt[buf].tag;
-        int           n = 0, guard;
-
-        for (guard = 0; guard < ORDERING_TABLE_SIZE + AH_P3D_MAX_PRIMS && p != 0 && !isendprim(p); guard++)
-        {
-            if (getlen(p) > 0)
-            {
-                if (n == AH_P3D_MAX_PRIMS)
-                    break;
-                prims[n++] = (P_TAG*)p;
-            }
-            p = getaddr(p);
-        }
-        if (n > 0)
-        {
-            for (i = 0; i < n - 1; i++)
-                setaddr(prims[i], prims[i + 1]);
-            setaddr(prims[n - 1], getaddr(head));
-            setaddr(head, prims[0]);
-        }
-    }
-
-    for (i = 0; i < nb && coords == s_p3dCoords; i++)
-        s_p3dCoords[i].flg = 0;
-
-    s_p3dDrawn = key;
-    memcpy(s_p3dDrawnRect, s_p3dRect, sizeof(s_p3dDrawnRect));
-}
-
-/* Copies the box the portrait pass drew into out of the finished frame. */
-static void Ah_Portrait3dCapture(const GLint* vp)
-{
-    const int key = s_p3dDrawn;
-    GLint prevRead = 0, prevDraw = 0, prevTex = 0, prevUnit = 0;
-    GLboolean scissor;
-    int   x0, y0, x1, y1;
-
-    if (key < 0)
-        return;
-    s_p3dDrawn = -1;
-
-    x0 = vp[0] + (int)((s_p3dDrawnRect[0] / s_w2 * 0.5f + 0.5f) * vp[2]) + 2;
-    x1 = vp[0] + (int)((s_p3dDrawnRect[2] / s_w2 * 0.5f + 0.5f) * vp[2]) - 2;
-    y1 = vp[1] + (int)((0.5f - s_p3dDrawnRect[1] / 480.0f) * vp[3]) - 2;
-    y0 = vp[1] + (int)((0.5f - s_p3dDrawnRect[3] / 480.0f) * vp[3]) + 2;
-    if (x1 - x0 < 8 || y1 - y0 < 8)
-        return;
-
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
-    scissor = glIsEnabled(GL_SCISSOR_TEST);
-    if (scissor)
-        glDisable(GL_SCISSOR_TEST);
-    if (!s_portFbo)
-        glGenFramebuffers(1, &s_portFbo);
     if (!s_portTex[key])
         s_portTex[key] = Ah_PortraitNewTex(NULL);
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, GR_ScreenReadFBO());
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_portFbo);
-    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_portTex[key], 0);
-    glBlitFramebuffer(x0, y0, x1, y1, 0, 0, AH_PORT_SIZE, AH_PORT_SIZE, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+    glGetIntegerv(GL_DEPTH_FUNC, &prevDepthFunc);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+    glGetIntegerv(GL_VIEWPORT, prevVp);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevBuf);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, prevClear);
+    prevDepth   = glIsEnabled(GL_DEPTH_TEST);
+    prevBlend   = glIsEnabled(GL_BLEND);
+    prevCull    = glIsEnabled(GL_CULL_FACE);
+    prevScissor = glIsEnabled(GL_SCISSOR_TEST);
 
-    /* Rendered on purpose, so it outranks any crop and is what gets kept. */
-    s_portTakenMs[key] = SDL_GetTicks();
-    if (s_portQual[key] < 10000.0f || SDL_GetTicks() - s_portSavedMs[key] > 30000)
+    glBindFramebuffer(GL_FRAMEBUFFER, s_mdlFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_portTex[key], 0);
     {
-        s_portQual[key]    = 10000.0f;
-        s_portSavedMs[key] = SDL_GetTicks();
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_portFbo);
-        Ah_PortraitSave(key);
+        static int s_depthSized;
+        if (!s_depthSized)
+        {
+            glBindRenderbuffer(GL_RENDERBUFFER, s_mdlDepth);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16, AH_PORT_SIZE, AH_PORT_SIZE);
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+            s_depthSized = 1;
+        }
+    }
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, s_mdlDepth);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+    {
+        int b;
+
+        glViewport(0, 0, AH_PORT_SIZE, AH_PORT_SIZE);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_TRUE);
+        if (monster)
+            glClearColor(0.10f, 0.02f, 0.02f, 1.0f);
+        else
+            glClearColor(0.02f, 0.08f, 0.04f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glUseProgram(s_mdlProg);
+        glBindVertexArray(s_mdlVao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_mdlVbo);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, AH_P3D_FLOATS * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, AH_P3D_FLOATS * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, AH_P3D_FLOATS * sizeof(float), (void*)(5 * sizeof(float)));
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)tris * 3 * AH_P3D_FLOATS * sizeof(float), s_p3dVerts, GL_STREAM_DRAW);
+
+        glUniformMatrix4fv(s_mdlLocMvp, 1, GL_FALSE, mvp);
+        glUniform1i(s_mdlLocTex, 0);
+        /* Key light from the camera's upper side, in world space. */
+        {
+            float lx = -fx + rx * 0.4f - ux * 0.5f, ly = -fy + ry * 0.4f - uy * 0.5f, lz = -fz + rz * 0.4f - uz * 0.5f;
+            const float ll = sqrtf(lx * lx + ly * ly + lz * lz);
+            glUniform3f(s_mdlLocLight, lx / ll, ly / ll, lz / ll);
+        }
+        glUniform1f(s_mdlLocAmb, 0.45f);
+        if (monster)
+            glUniform4f(s_mdlLocTint, 1.0f, 0.3f, 0.25f, 1.0f);
+        else
+            glUniform4f(s_mdlLocTint, 0.45f, 1.0f, 0.55f, 1.0f);
+
+        for (b = 0; b < s_p3dBatchN; b++)
+        {
+            glBindTexture(GL_TEXTURE_2D, s_p3dBatches[b].tex);
+            glDrawArrays(GL_TRIANGLES, s_p3dBatches[b].first, s_p3dBatches[b].count);
+        }
     }
 
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prevDraw);
+    glDepthFunc((GLenum)prevDepthFunc);
+    glDepthMask(prevDepthMask);
+    glViewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3]);
+    glClearColor(prevClear[0], prevClear[1], prevClear[2], prevClear[3]);
+    glBindVertexArray((GLuint)prevVao);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)prevBuf);
+    glUseProgram((GLuint)prevProg);
     glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
     glActiveTexture((GLenum)prevUnit);
-    if (scissor)
-        glEnable(GL_SCISSOR_TEST);
+    if (prevDepth)  glEnable(GL_DEPTH_TEST);  else glDisable(GL_DEPTH_TEST);
+    if (prevBlend)  glEnable(GL_BLEND);       else glDisable(GL_BLEND);
+    if (prevCull)   glEnable(GL_CULL_FACE);   else glDisable(GL_CULL_FACE);
+    if (prevScissor) glEnable(GL_SCISSOR_TEST);
+
+    /* Drawn on purpose, so it outranks any crop of the same character. */
+    s_portQual[key]    = 10000.0f;
+    s_portTakenMs[key] = SDL_GetTicks();
+    return 1;
 }
 
 void Pc_FlightHud_Draw(void)
@@ -3368,7 +3564,13 @@ void Pc_FlightHud_Draw(void)
      * map and the pause screen draw something else over the world. */
     if (!s_portLoaded)
         Ah_PortraitLoadAll();
-    Ah_Portrait3dCapture(vp);
+    if (g_PcConfig.flightHudPortrait3d && s_p3dKey >= 0 && Ah_InGameplay())
+    {
+        if (!s_mdlReady)
+            Ah_ModelGlInit();
+        if (s_mdlReady == 1)
+            Ah_ModelPortraitRender(s_p3dKey, s_p3dMonster, (float)SDL_GetTicks() / 1000.0f);
+    }
     switch (g_SysWork.sysState)
     {
         case SysState_Gameplay:
