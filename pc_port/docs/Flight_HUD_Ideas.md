@@ -49,6 +49,14 @@ Tutte le voci sono implementate e controllate nell'anteprima offline; restano
 > uccisione, salute sotto 25, caricatore a 0, ultimo flare, nuova zona, boss.
 > Modern: in alto al centro (scende a y -172 sul touch con Quick Save/Load);
 > Classic: sotto il nastro della prua.
+>
+> **Ritratti dal gioco** (`Ah_PortraitCapture`): il volto di chi parla è
+> ritagliato dall'immagine reale del frame (modello e texture del gioco)
+> proiettando la testa con `GsWSMATRIX`, in gameplay e nelle scene
+> d'intermezzo, solo se il personaggio è vicino e girato verso la camera. Il
+> mostro che fa lock ha una ripresa dal vivo; per gli altri resta il primo
+> piano migliore, salvato in `gamedata/hud_portraits/<charaId>.rgba`. Senza
+> cattura resta il busto a fil di ferro. **Da provare nel gioco vero.**
 
 
 - Riquadro in alto al centro: riga 1 nome (es. "Cybil"), riga 2 la frase tra

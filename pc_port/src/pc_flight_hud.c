@@ -33,10 +33,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 #include <SDL.h>
 #include <PsyX/common/glad.h>
 #include <PsyX/PsyX_backend.h>
+#include <libgs.h>
 
 #include "sh_log.h"
 #include "pc_config.h"
@@ -49,6 +54,7 @@ extern long   ReadGeomScreen(void);
 extern void   vcGetNowCamPos(VECTOR3* cam_pos);
 extern int    PsyX_RawControllerBindHeld(int buttonOrAxis);
 extern int    g_PcConsoleInputActive;
+extern GLuint GR_ScreenReadFBO(void);
 
 #define AH_PI 3.14159265f
 
@@ -1617,10 +1623,36 @@ static void Ah_KillFx(float scoreX, float scoreY, float nowS)
     }
 }
 
-/* Comm portrait: a wireframe bust built from a deformed ellipsoid, turned and
- * lit by depth. Shapes come from parameters rather than the game's models: the
- * speaker is rarely loaded (Cybil is not in most maps), and a second pass
- * through the PSX pipeline for a corner box is not worth its risk. */
+/* Live portrait state; the capture and its GL live with the draw below. */
+static GLuint s_portTex[Chara_Count];
+static float  s_portQual[Chara_Count];   /* crop radius in pixels at capture */
+static Uint32 s_portTakenMs[Chara_Count];
+static Uint32 s_portSavedMs[Chara_Count];
+static int    s_portLoaded;
+static GLuint s_portFbo;
+static int    s_portLive = -1;           /* charaId whose feed the radio shows */
+
+static GLuint s_texProg;
+static GLint  s_texLocTex, s_texLocTint, s_texLocMono, s_texLocTime;
+
+static struct
+{
+    int   on, chara, monster;
+    float l, t, size, age;
+} s_portDraw;
+
+static int Ah_PortraitKey(int charaId)
+{
+    if (charaId == Chara_EndingCybil)
+        return Chara_Cybil;
+    if (charaId == Chara_Cybil || Ah_IsEnemy(charaId))
+        return charaId;
+    return -1;
+}
+
+/* Fallback comm portrait, until the game has shown the speaker's face (see
+ * Ah_PortraitCapture): a wireframe bust built from a deformed ellipsoid,
+ * turned and lit by depth. */
 typedef struct
 {
     float rx, ry, rz;  /* half extents */
@@ -1668,7 +1700,7 @@ static void Ah_FacePoint(const s_AhFace* f, float th, float ph, float open, floa
     *x += (sinf(ph) < 0.0f ? -h : h) * 0.3f;
 }
 
-static void Ah_Portrait(float l, float t, float size, int face, int monster, float age, float nowS)
+static void Ah_Portrait(float l, float t, float size, int face, int chara, int monster, float age, float nowS)
 {
     static const float red[4] = { 1.0f, 0.3f, 0.25f, 0.95f };
     const s_AhFace* f  = &s_faces[face];
@@ -1694,6 +1726,19 @@ static void Ah_Portrait(float l, float t, float size, int face, int monster, flo
     Ah_UseMain();
     Ah_Box(l, t, l + size, t + size, s_th);
 
+    if (monster)
+        s_portLive = chara;
+    if (age >= 0.25f && chara >= 0 && s_portTex[chara])
+    {
+        s_portDraw.on      = 1;
+        s_portDraw.chara   = chara;
+        s_portDraw.monster = monster;
+        s_portDraw.l       = l;
+        s_portDraw.t       = t;
+        s_portDraw.size    = size;
+        s_portDraw.age     = age;
+    }
+
     /* The channel opens on static; monsters never quite come through clean. */
     n = (age < 0.25f) ? 14 : (monster ? 3 : 0);
     for (k = 0; k < n; k++)
@@ -1702,7 +1747,7 @@ static void Ah_Portrait(float l, float t, float size, int face, int monster, flo
         Ah_Color(base[0], base[1], base[2], (0.15f + 0.35f * Ah_Rand()) * s_main[3]);
         Ah_Rect(nx, ny, nx + 6.0f + Ah_Rand() * size * 0.45f, ny + 1.0f);
     }
-    if (age < 0.25f)
+    if (age < 0.25f || s_portDraw.on)
         return;
 
     if (age < AH_RADIO_TIME * 0.7f)
@@ -1817,7 +1862,8 @@ static void Ah_RadioBox(float top)
         Ah_Color(red[0], red[1], red[2], red[3] * s_main[3]);
     Ah_Text(who, -w * 0.5f + 8.0f, top + 5.0f, 7.0f, 0);
 
-    Ah_Portrait(w * 0.5f + 4.0f, top, 72.0f, m->face, m->who == NULL, AH_RADIO_TIME - s_radioT,
+    Ah_Portrait(w * 0.5f + 4.0f, top, 72.0f, m->face,
+                Ah_PortraitKey(m->who ? Chara_Cybil : chara), m->who == NULL, AH_RADIO_TIME - s_radioT,
                 (float)SDL_GetTicks() / 1000.0f);
 }
 
@@ -2624,6 +2670,340 @@ static void Ah_Submit(const s_AhBatch* b)
     glDrawArrays(GL_TRIANGLES, 0, b->n);
 }
 
+/* ------------------------------------------------------------------ */
+/* Comm portraits from the game's own picture                          */
+/* ------------------------------------------------------------------ */
+
+/* The speaker's face is cut out of the rendered frame: the real model, lit and
+ * textured by the game, projected through the same world->screen matrix the
+ * frame was drawn with (GsWSMATRIX, Q8 world units). A monster on the radio
+ * gets a live feed while it is on screen; otherwise the best close-up seen so
+ * far is shown. Cybil is rarely on screen when she calls, so her best capture
+ * is kept on disk and survives restarts. With no capture yet, the wireframe
+ * bust stands in. */
+
+#define AH_PORT_SIZE  128
+#define AH_PORT_DIR   "gamedata/hud_portraits"
+#define AH_PORT_MAGIC 0x31504853u /* "SHP1" */
+
+static void Ah_PortraitPath(int key, char* buf, size_t n)
+{
+    snprintf(buf, n, AH_PORT_DIR "/%d.rgba", key);
+}
+
+static GLuint Ah_PortraitNewTex(const unsigned char* rgba)
+{
+    GLuint t = 0;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, AH_PORT_SIZE, AH_PORT_SIZE, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    return t;
+}
+
+/* File: magic, quality, then RGBA rows bottom-up as GL reads them. */
+static void Ah_PortraitLoadAll(void)
+{
+    static unsigned char px[AH_PORT_SIZE * AH_PORT_SIZE * 4];
+    int key;
+
+    s_portLoaded = 1;
+    for (key = 0; key < Chara_Count; key++)
+    {
+        char     path[96];
+        FILE*    f;
+        unsigned hdr[2];
+
+        if (Ah_PortraitKey(key) != key)
+            continue;
+        Ah_PortraitPath(key, path, sizeof(path));
+        f = fopen(path, "rb");
+        if (!f)
+            continue;
+        if (fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[0] == AH_PORT_MAGIC &&
+            fread(px, sizeof(px), 1, f) == 1)
+        {
+            s_portTex[key]  = Ah_PortraitNewTex(px);
+            s_portQual[key] = (float)hdr[1];
+        }
+        fclose(f);
+    }
+}
+
+static void Ah_PortraitSave(int key)
+{
+    static unsigned char px[AH_PORT_SIZE * AH_PORT_SIZE * 4];
+    char     path[96];
+    unsigned hdr[2];
+    FILE*    f;
+
+#ifdef _WIN32
+    _mkdir("gamedata");
+    _mkdir(AH_PORT_DIR);
+#else
+    mkdir("gamedata", 0775);
+    mkdir(AH_PORT_DIR, 0775);
+#endif
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, AH_PORT_SIZE, AH_PORT_SIZE, GL_RGBA, GL_UNSIGNED_BYTE, px);
+
+    Ah_PortraitPath(key, path, sizeof(path));
+    f = fopen(path, "wb");
+    if (!f)
+        return;
+    hdr[0] = AH_PORT_MAGIC;
+    hdr[1] = (unsigned)s_portQual[key];
+    fwrite(hdr, sizeof(hdr), 1, f);
+    fwrite(px, sizeof(px), 1, f);
+    fclose(f);
+}
+
+/* Where to aim the camera on each body plan, metres above the feet, and how
+ * much of it to frame. Flyers and the big ones use their collision centre. */
+static void Ah_HeadOf(const s_SubCharacter* npc, int key, float* wx, float* wy, float* wz, float* rad)
+{
+    const float yaw = Ah_Turns(npc->rotation.vy) * 2.0f * AH_PI;
+    float up = -1.0f, fwd = 0.0f;
+
+    *rad = 0.32f;
+    if (key == Chara_Cybil)
+        up = 1.52f;
+    else
+    {
+        switch (Ah_FaceOf(key))
+        {
+            case AH_FACE_HUMAN: up = 1.52f; break;
+            case AH_FACE_CHILD: up = 1.02f; *rad = 0.30f; break;
+            case AH_FACE_DOG:   up = 0.48f; fwd = 0.35f; *rad = 0.40f; break;
+            default:            *rad = 0.65f; break;
+        }
+    }
+
+    *wx = Ah_Q12f(npc->position.vx) + sinf(yaw) * fwd;
+    *wz = Ah_Q12f(npc->position.vz) + cosf(yaw) * fwd;
+    *wy = (up > 0.0f) ? Ah_Q12f(npc->position.vy) - up
+                      : Ah_Q12f(npc->position.vy + npc->collision.box.offsetY);
+}
+
+static void Ah_PortraitCapture(const GLint* vp, float nowS)
+{
+    const MATRIX* m = &GsWSMATRIX;
+    const float   H = s_camH, halfW = 120.0f * ((float)vp[2] / (float)vp[3]);
+    const Uint32  now = SDL_GetTicks();
+    float camX, camZ, tx, ty, tz;
+    GLint prevRead = 0, prevDraw = 0, prevTex = 0, prevUnit = 0;
+    GLboolean scissor = GL_FALSE;
+    int   i, did = 0;
+
+    (void)nowS;
+
+    /* Camera position on the ground plane: -R^T t, back in metres. */
+    tx = (float)m->t[0]; ty = (float)m->t[1]; tz = (float)m->t[2];
+    camX = -(m->m[0][0] * tx + m->m[1][0] * ty + m->m[2][0] * tz) / 4096.0f / 256.0f;
+    camZ = -(m->m[0][2] * tx + m->m[1][2] * ty + m->m[2][2] * tz) / 4096.0f / 256.0f;
+
+    for (i = 0; i < NPC_COUNT_MAX; i++)
+    {
+        const s_SubCharacter* npc = &g_SysWork.npcs[i];
+        const int key = Ah_PortraitKey(npc->model.charaId);
+        float wx, wy, wz, rad, vx, vy, vz, px, py, r, fx, fz, cx, cz, cl;
+        int   live, srcX0, srcY0, srcX1, srcY1;
+
+        if (key < 0 || npc->health <= Q12(0.0f))
+            continue;
+        if (key != Chara_Cybil && !Ah_NpcLive(npc))
+            continue;
+
+        live = (key == s_portLive);
+        if (now - s_portTakenMs[key] < (Uint32)(live ? 90 : 400))
+            continue;
+
+        Ah_HeadOf(npc, key, &wx, &wy, &wz, &rad);
+        wx *= 256.0f; wy *= 256.0f; wz *= 256.0f;
+        vx = (m->m[0][0] * wx + m->m[0][1] * wy + m->m[0][2] * wz) / 4096.0f + m->t[0];
+        vy = (m->m[1][0] * wx + m->m[1][1] * wy + m->m[1][2] * wz) / 4096.0f + m->t[1];
+        vz = (m->m[2][0] * wx + m->m[2][1] * wy + m->m[2][2] * wz) / 4096.0f + m->t[2];
+        if (vz < 0.6f * 256.0f || vz > 12.0f * 256.0f)
+            continue;
+
+        px = (float)vp[0] + ((vx * H / vz) / halfW * 0.5f + 0.5f) * (float)vp[2];
+        py = (float)vp[1] + (0.5f - (vy * H / vz) / 120.0f * 0.5f) * (float)vp[3];
+        r  = (rad * 256.0f * H / vz) / 120.0f * 0.5f * (float)vp[3];
+        if (r < 20.0f)
+            continue;
+        if (px - r < vp[0] || py - r < vp[1] || px + r > vp[0] + vp[2] || py + r > vp[1] + vp[3])
+            continue;
+
+        /* A face, not the back of a head: the body must turn toward the lens. */
+        if (Ah_FaceOf(key) != AH_FACE_BIRD && Ah_FaceOf(key) != AH_FACE_BEAST)
+        {
+            fx = sinf(Ah_Turns(npc->rotation.vy) * 2.0f * AH_PI);
+            fz = cosf(Ah_Turns(npc->rotation.vy) * 2.0f * AH_PI);
+            cx = camX - wx / 256.0f;
+            cz = camZ - wz / 256.0f;
+            cl = sqrtf(cx * cx + cz * cz);
+            if (cl < 0.01f || (fx * cx + fz * cz) / cl < 0.35f)
+                continue;
+        }
+
+        if (!live && s_portTex[key] && r < s_portQual[key] * 0.8f)
+            continue;
+
+        if (!did)
+        {
+            did = 1;
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
+            glActiveTexture(GL_TEXTURE0);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+            scissor = glIsEnabled(GL_SCISSOR_TEST);
+            if (scissor)
+                glDisable(GL_SCISSOR_TEST);
+            if (!s_portFbo)
+                glGenFramebuffers(1, &s_portFbo);
+        }
+
+        if (!s_portTex[key])
+            s_portTex[key] = Ah_PortraitNewTex(NULL);
+
+        srcX0 = (int)(px - r); srcX1 = (int)(px + r);
+        srcY0 = (int)(py - r * 1.05f); srcY1 = (int)(py + r * 0.95f);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, GR_ScreenReadFBO());
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_portFbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_portTex[key], 0);
+        glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, 0, 0, AH_PORT_SIZE, AH_PORT_SIZE,
+                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+        s_portTakenMs[key] = now;
+        if (r >= s_portQual[key] || !live)
+        {
+            s_portQual[key] = r;
+            if (now - s_portSavedMs[key] > 5000)
+            {
+                s_portSavedMs[key] = now;
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, s_portFbo);
+                Ah_PortraitSave(key);
+            }
+        }
+    }
+
+    if (did)
+    {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prevRead);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prevDraw);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
+        glActiveTexture((GLenum)prevUnit);
+        if (scissor)
+            glEnable(GL_SCISSOR_TEST);
+    }
+}
+
+static void Ah_PortraitTexInit(void)
+{
+    static const char* vs_src =
+        "attribute vec2 a_pos;\n"
+        "attribute vec2 a_uv;\n"
+        "varying vec2 v_uv;\n"
+        "void main() {\n"
+        "    v_uv = a_uv;\n"
+        "    gl_Position = vec4(a_pos, 0.0, 1.0);\n"
+        "}\n";
+    /* A comm screen, not a photo: colour pulled toward the HUD tint, scanlines,
+     * and a slow roll bar. */
+    static const char* fs_src =
+        "#ifdef GL_ES\n"
+        "precision mediump float;\n"
+        "#endif\n"
+        "varying vec2 v_uv;\n"
+        "uniform sampler2D u_tex;\n"
+        "uniform vec4 u_tint;\n"
+        "uniform float u_mono;\n"
+        "uniform float u_time;\n"
+        "void main() {\n"
+        "    vec3 c = texture2D(u_tex, v_uv).rgb;\n"
+        "    float l = dot(c, vec3(0.3, 0.59, 0.11));\n"
+        "    c = mix(c, l * 1.6 * u_tint.rgb, u_mono);\n"
+        "    float scan = 0.78 + 0.22 * step(0.5, fract(gl_FragCoord.y * 0.5));\n"
+        "    float roll = 1.0 + 0.12 * smoothstep(0.92, 1.0, fract(v_uv.y * 0.7 - u_time * 0.25));\n"
+        "    gl_FragColor = vec4(c * scan * roll, u_tint.a);\n"
+        "}\n";
+    GLuint vs = Ah_Shader(GL_VERTEX_SHADER, vs_src);
+    GLuint fs = Ah_Shader(GL_FRAGMENT_SHADER, fs_src);
+    GLint  ok = 0;
+
+    if (!vs || !fs)
+        return;
+    s_texProg = glCreateProgram();
+    glAttachShader(s_texProg, vs);
+    glAttachShader(s_texProg, fs);
+    glBindAttribLocation(s_texProg, 0, "a_pos");
+    glBindAttribLocation(s_texProg, 1, "a_uv");
+    glLinkProgram(s_texProg);
+    glGetProgramiv(s_texProg, GL_LINK_STATUS, &ok);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    if (!ok)
+    {
+        glDeleteProgram(s_texProg);
+        s_texProg = 0;
+        return;
+    }
+    s_texLocTex  = glGetUniformLocation(s_texProg, "u_tex");
+    s_texLocTint = glGetUniformLocation(s_texProg, "u_tint");
+    s_texLocMono = glGetUniformLocation(s_texProg, "u_mono");
+    s_texLocTime = glGetUniformLocation(s_texProg, "u_time");
+}
+
+/* Draws the queued portrait quad, then hands the colour program its vertex
+ * layout back. */
+static void Ah_PortraitDraw(float nowS)
+{
+    const int key = s_portDraw.chara;
+    float l, t, r, b, v[6][4], inset = 2.0f;
+    GLint prevTex = 0;
+
+    if (!s_portDraw.on || !s_texProg || key < 0 || !s_portTex[key])
+        return;
+
+    l = (s_portDraw.l + inset) / s_w2;
+    r = (s_portDraw.l + s_portDraw.size - inset) / s_w2;
+    t = -(s_portDraw.t + inset) / 240.0f;
+    b = -(s_portDraw.t + s_portDraw.size - inset) / 240.0f;
+    v[0][0] = l; v[0][1] = t; v[0][2] = 0.0f; v[0][3] = 1.0f;
+    v[1][0] = l; v[1][1] = b; v[1][2] = 0.0f; v[1][3] = 0.0f;
+    v[2][0] = r; v[2][1] = t; v[2][2] = 1.0f; v[2][3] = 1.0f;
+    v[3][0] = r; v[3][1] = t; v[3][2] = 1.0f; v[3][3] = 1.0f;
+    v[4][0] = l; v[4][1] = b; v[4][2] = 0.0f; v[4][3] = 0.0f;
+    v[5][0] = r; v[5][1] = b; v[5][2] = 1.0f; v[5][3] = 0.0f;
+
+    glUseProgram(s_texProg);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    glBindTexture(GL_TEXTURE_2D, s_portTex[key]);
+    glUniform1i(s_texLocTex, 0);
+    if (s_portDraw.monster)
+        glUniform4f(s_texLocTint, 1.0f, 0.35f, 0.3f, s_main[3]);
+    else
+        glUniform4f(s_texLocTint, s_main[0], s_main[1], s_main[2], s_main[3]);
+    glUniform1f(s_texLocMono, s_portDraw.monster ? 0.55f : 0.35f);
+    glUniform1f(s_texLocTime, nowS);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
+
+    glUseProgram(s_prog);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, AH_VERT_FLOATS * sizeof(float), (void*)0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, AH_VERT_FLOATS * sizeof(float), (void*)(2 * sizeof(float)));
+}
+
 void Pc_FlightHud_Draw(void)
 {
     GLint vp[4];
@@ -2634,9 +3014,7 @@ void Pc_FlightHud_Draw(void)
     GLboolean prevBlend, prevDepth, prevCull;
     int   red;
 
-    if (!Pc_FlightHud_Enabled() || !Ah_InGameplay())
-        return;
-    if (g_PcConsoleInputActive)
+    if (!Pc_FlightHud_Enabled() || g_PcConsoleInputActive || g_GameWork.gameState != GameState_InGame)
         return;
 
     glGetIntegerv(GL_VIEWPORT, vp);
@@ -2647,7 +3025,10 @@ void Pc_FlightHud_Draw(void)
     aspect = vpW / vpH;
 
     if (!s_glReady)
+    {
         Ah_GlInit();
+        Ah_PortraitTexInit();
+    }
     if (s_glReady != 1)
         return;
 
@@ -2657,6 +3038,26 @@ void Pc_FlightHud_Draw(void)
     vcGetNowCamPos(&s_cam);
     if (s_camH < 1.0f)
         s_camH = 1.0f;
+
+    /* Cutscenes count: they are where the cast is seen up close. Menus, the
+     * map and the pause screen draw something else over the world. */
+    if (!s_portLoaded)
+        Ah_PortraitLoadAll();
+    switch (g_SysWork.sysState)
+    {
+        case SysState_Gameplay:
+        case SysState_ReadMessage:
+        case SysState_EventCallback:
+        case SysState_EventSetFlag:
+        case SysState_EventPlaySound:
+            Ah_PortraitCapture(vp, (float)SDL_GetTicks() / 1000.0f);
+            break;
+        default:
+            break;
+    }
+
+    if (!Ah_InGameplay())
+        return;
 
     red = s_alert && g_SysWork.playerWork.player.health > Q12(0.0f);
     {
@@ -2678,6 +3079,8 @@ void Pc_FlightHud_Draw(void)
     s_hud.n  = 0;
     s_glow.n = 0;
     s_fill.n = 0;
+    s_portDraw.on = 0;
+    s_portLive    = -1;
     s_cur    = &s_glow;
     Ah_BuildFlares();
     s_cur = &s_hud;
@@ -2719,6 +3122,8 @@ void Pc_FlightHud_Draw(void)
         glUniform1f(s_locShadow, 0.0f);
         Ah_Submit(&s_fill);
     }
+
+    Ah_PortraitDraw((float)SDL_GetTicks() / 1000.0f);
 
     if (s_glow.n > 0)
     {
