@@ -56,7 +56,7 @@ static void say(int face, int chara)
 static void frame(float aspect, const char* path, int alert)
 {
     int k;
-    s_w2 = 240.0f * aspect; s_halfW = 120.0f * aspect; s_camH = 256; vcGetNowCamPos(&s_cam);
+    s_w2 = 240.0f * aspect; s_kx = 2.0f; s_ky = 240.0f / 112.0f; s_camH = 256; vcGetNowCamPos(&s_cam);
     red_setup:
     {
         const float o = 1.0f;
