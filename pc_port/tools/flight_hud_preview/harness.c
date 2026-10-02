@@ -106,5 +106,57 @@ int main(int argc, char** argv)
     g_PcConfig.flightHud = 1;
     s_touch = 1;
     frame(19.5f/9.0f, "touch.txt", 0);
+    s_touch = 0;
+
+    /* A kill a moment ago, the radio talking, one enemy off the right edge
+     * and one behind the camera, callsigns on. */
+    g_SysWork.playerWork.player.health = Q12(72.0f);
+    s_sav.mapIdx = MapIdx_MAP2_S00;
+    for (i = 0; i < NPC_COUNT_MAX; i++) g_SysWork.npcs[i].model.charaId = 0;
+    enemy(0, Chara_Groaner, 3.0f, 9.0f, 0.0f);
+    enemy(1, Chara_GreyChild, 14.0f, 6.0f, 0.0f);
+    enemy(2, Chara_AirScreamer, -3.0f, -9.0f, 0.0f);
+    enemy(3, Chara_Stalker, -1.0f, 12.0f, 0.0f);
+    g_SysWork.npcs[3].health = Q12(40.0f);
+    for (i = 0; i < 5; i++) Pc_FlightHud_Update();
+    g_SysWork.npcs[3].health = Q12(15.0f);
+    Pc_FlightHud_Update();
+    g_SysWork.npcs[0].health = 0;
+    s_sav.rangedKillCount++;
+    for (i = 0; i < 9; i++) Pc_FlightHud_Update();
+    g_PcConfig.flightHudCallsigns = 2;
+    frame(16.0f/9.0f, "events.txt", 0);
+    g_PcConfig.flightHudCallsigns = 2;
+    g_PcConfig.flightHud = 2;
+    frame(16.0f/9.0f, "events_classic.txt", 0);
+    g_PcConfig.flightHud = 1;
+    g_PcConfig.flightHudCallsigns = 0;
+
+    /* Third alarm level: a Stalker locked on from 2 m. */
+    for (i = 0; i < NPC_COUNT_MAX; i++) g_SysWork.npcs[i].model.charaId = 0;
+    for (i = 0; i < 40; i++) Pc_FlightHud_Update();
+    enemy(4, Chara_Stalker, 0.4f, 2.0f, 180.0f);
+    for (i = 0; i < 80; i++) Pc_FlightHud_Update();
+    printf("danger=%d alert=%d\n", s_danger, s_alert);
+    frame(16.0f/9.0f, "danger.txt", 1);
+
+    /* New zone, then a boss down: banner waits for the debrief. */
+    for (i = 0; i < NPC_COUNT_MAX; i++) g_SysWork.npcs[i].model.charaId = 0;
+    for (i = 0; i < 200; i++) Pc_FlightHud_Update();
+    s_sav.mapIdx = MapIdx_MAP2_S01;
+    for (i = 0; i < 20; i++) Pc_FlightHud_Update();
+    printf("banner=%d t=%f\n", s_bannerZone, s_bannerT);
+    frame(16.0f/9.0f, "banner.txt", 0);
+    for (i = 0; i < 200; i++) Pc_FlightHud_Update();
+    enemy(5, Chara_SplitHead, 2.0f, 15.0f, 0.0f);
+    Pc_FlightHud_Update();
+    g_SysWork.npcs[5].health = 0;
+    s_sav.gameplayTimer += Q12(600.0f);
+    s_sav.rangedKillCount += 3;
+    s_sav.firedShotCount = 40;
+    s_sav.midRangeShotCount = 31;
+    for (i = 0; i < 20; i++) Pc_FlightHud_Update();
+    printf("debrief=%f rank=%c\n", s_debriefT, s_debrief.rank);
+    frame(16.0f/9.0f, "debrief.txt", 0);
     return 0;
 }

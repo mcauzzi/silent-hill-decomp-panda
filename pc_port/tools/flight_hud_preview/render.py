@@ -55,5 +55,5 @@ def render(p,out,W,H):
     img=Image.alpha_composite(img,tris(h,sp,sp,True))
     img=Image.alpha_composite(img,tris(h))
     img.convert('RGB').save(out)
-for name,W,H in [('normal',1280,720),('alert',1280,720),('flare',1280,720),('aim',1280,720),('classic',1280,720),('touch',1386,640)]:
+for name,W,H in [('normal',1280,720),('alert',1280,720),('flare',1280,720),('aim',1280,720),('classic',1280,720),('touch',1386,640),('events',1280,720),('events_classic',1280,720),('danger',1280,720),('banner',1280,720),('debrief',1280,720)]:
     render(name+'.txt',name+'.png',W,H)

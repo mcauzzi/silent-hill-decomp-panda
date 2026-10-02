@@ -11,6 +11,12 @@
  *    crosshair and the touch overlay read Pc_FlightHud_AlertActive too).
  *  - Flares: L3+R3 together (or the touch FLARE button) pops a salvo that breaks
  *    every lock and jams new ones for AH_JAM_TIME. Stock recharges over time.
+ *  - A lock from closer than AH_DANGER_RANGE is the third alarm level: faster
+ *    tones, "EVADE", and a red pulse on the screen edges.
+ *  - Events: "DESTROYED" and a "+1000" on each kill, edge arrows for enemies
+ *    out of the picture, text-only radio calls, a "MISSION UPDATE" banner on
+ *    the first visit to a zone, and a debrief with a rank after a boss or on
+ *    reaching a new chapter.
  *
  * Logic runs from the gameplay state (Pc_FlightHud_Update, game time, so a pause
  * freezes it); drawing runs from the post-capture hook with its own GL program
@@ -62,6 +68,17 @@ extern int    g_PcConsoleInputActive;
 #define AH_TARGET_RANGE   40.0f  /* m, containers beyond this are not drawn */
 #define AH_RADAR_RANGE    25.0f  /* m at the radar rim */
 
+#define AH_DANGER_RANGE    2.5f  /* m, a lock this close is the third alarm level */
+#define AH_KILL_MAX        4
+#define AH_KILL_TIME       1.2f  /* s "DESTROYED" stays over the wreck */
+#define AH_SCORE_FLY       0.9f  /* s the "+1000" takes to reach the score */
+#define AH_RADIO_TIME      3.6f
+#define AH_RADIO_QUEUE     3
+#define AH_RADIO_COOLDOWN 25.0f  /* s before the same kind of call can come again */
+#define AH_BANNER_TIME     3.5f
+#define AH_BANNER_EDGE     0.35f /* s the banner rules take to open / close */
+#define AH_DEBRIEF_TIME    7.0f
+
 #define AH_GRAVITY         5.5f  /* m/s^2, +Y is down */
 #define AH_FLARE_DRAG      0.6f
 #define AH_TRAIL_N         8
@@ -100,6 +117,94 @@ static int   s_flareReq;
 
 static float s_beepT;
 static int   s_prevAnyLock;
+static int   s_danger;
+
+static float s_lockDist[NPC_COUNT_MAX];
+static int   s_wasAlive[NPC_COUNT_MAX];
+static float s_hpMax[NPC_COUNT_MAX];
+
+typedef struct
+{
+    float x, y, z;
+    float age;
+} s_AhKill;
+
+static s_AhKill s_kills[AH_KILL_MAX] = {
+    { 0, 0, 0, AH_KILL_TIME }, { 0, 0, 0, AH_KILL_TIME }, { 0, 0, 0, AH_KILL_TIME }, { 0, 0, 0, AH_KILL_TIME }
+};
+static int      s_killNext;
+
+/* Radio chatter */
+enum
+{
+    AH_RC_LOCK,
+    AH_RC_KILL,
+    AH_RC_HURT,
+    AH_RC_DRY,
+    AH_RC_FLARE,
+    AH_RC_ZONE,
+    AH_RC_BOSS,
+    AH_RC_COUNT
+};
+
+typedef struct
+{
+    int         cat;
+    const char* who;
+    const char* line;
+} s_AhRadioLine;
+
+static const s_AhRadioLine s_radioLines[] = {
+    { AH_RC_LOCK,  "CYBIL", "HARRY, YOU'VE GOT A LOCK ON YOU!" },
+    { AH_RC_LOCK,  "CYBIL", "ONE OF THEM HAS YOU IN ITS SIGHTS!" },
+    { AH_RC_KILL,  "CYBIL", "NICE SHOT, HARRY." },
+    { AH_RC_KILL,  "CYBIL", "TARGET DOWN." },
+    { AH_RC_KILL,  "CYBIL", "SPLASH ONE. KEEP MOVING." },
+    { AH_RC_HURT,  "CYBIL", "YOU'RE HIT BAD. PATCH YOURSELF UP!" },
+    { AH_RC_HURT,  "CYBIL", "HARRY, YOU'RE BLEEDING. HEAL UP!" },
+    { AH_RC_DRY,   "CYBIL", "YOU'RE DRY! RELOAD!" },
+    { AH_RC_DRY,   "CYBIL", "MAGAZINE'S EMPTY, HARRY!" },
+    { AH_RC_FLARE, "CYBIL", "OUT OF FLARES. STAY OUT OF SIGHT." },
+    { AH_RC_ZONE,  "CYBIL", "NEW AREA. KEEP YOUR EYES OPEN." },
+    { AH_RC_ZONE,  "CYBIL", "I DON'T LIKE THE LOOK OF THIS PLACE." },
+    { AH_RC_BOSS,  "CYBIL", "IT'S DOWN! GOOD WORK, HARRY." },
+};
+#define AH_RADIO_LINES ((int)(sizeof(s_radioLines) / sizeof(s_radioLines[0])))
+
+static int   s_radioQ[AH_RADIO_QUEUE];
+static int   s_radioN;
+static float s_radioT;
+static int   s_radioLast = -1;
+static float s_radioCool[AH_RC_COUNT];
+static int   s_radioPrevLock;
+static float s_radioPrevHp = 100.0f;
+static int   s_radioPrevWeapon = -1, s_radioPrevAmmo;
+
+/* Zone banner and debrief */
+typedef struct
+{
+    float timer;
+    int   kills, fired, hits;
+} s_AhStats;
+
+typedef struct
+{
+    float time;
+    int   kills, fired, hits;
+    char  rank;
+} s_AhDebrief;
+
+static int         s_prevMap = -1;
+static unsigned    s_zoneSeen;
+static int         s_bannerZone = -1, s_bannerPending = -1;
+static float       s_bannerT;
+static unsigned    s_chapterSeen;
+static int         s_missionBoss;
+static int         s_statsValid;
+static s_AhStats   s_statsStart;
+static float       s_lastTimer;
+static s_AhDebrief s_debrief;
+static float       s_debriefT;
 
 static s_AhFlare s_flares[AH_PARTICLES_MAX];
 static unsigned  s_rng = 0x1234567u;
@@ -293,6 +398,254 @@ static void Ah_FlareSim(float dt)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Radio                                                               */
+/* ------------------------------------------------------------------ */
+
+static void Ah_Radio(int cat)
+{
+    int pick[AH_RADIO_LINES];
+    int n = 0, i;
+
+    if (s_radioCool[cat] > 0.0f || s_radioN >= AH_RADIO_QUEUE)
+        return;
+
+    for (i = 0; i < AH_RADIO_LINES; i++)
+        if (s_radioLines[i].cat == cat && i != s_radioLast)
+            pick[n++] = i;
+    if (n == 0)
+        return;
+
+    s_radioLast        = pick[(int)(Ah_Rand() * n) % n];
+    s_radioQ[s_radioN] = s_radioLast;
+    if (s_radioN == 0)
+        s_radioT = AH_RADIO_TIME;
+    s_radioN++;
+    s_radioCool[cat] = AH_RADIO_COOLDOWN;
+}
+
+static void Ah_RadioTick(float dt)
+{
+    const s_SubCharacter* pl = &g_SysWork.playerWork.player;
+    const float hp = Ah_Q12f(pl->health);
+    const int   w  = g_SavegamePtr->equippedWeapon;
+    const int   ammo = g_SysWork.playerCombat.currentWeaponAmmo;
+    int i;
+
+    for (i = 0; i < AH_RC_COUNT; i++)
+        if (s_radioCool[i] > 0.0f)
+            s_radioCool[i] -= dt;
+
+    if (s_anyLock && !s_radioPrevLock)
+        Ah_Radio(AH_RC_LOCK);
+    s_radioPrevLock = s_anyLock;
+
+    if (hp > 0.0f && hp < 25.0f && s_radioPrevHp >= 25.0f)
+        Ah_Radio(AH_RC_HURT);
+    s_radioPrevHp = hp;
+
+    if (w >= InvItemId_Handgun && w <= InvItemId_Shotgun && w == s_radioPrevWeapon &&
+        ammo == 0 && s_radioPrevAmmo > 0)
+        Ah_Radio(AH_RC_DRY);
+    s_radioPrevWeapon = w;
+    s_radioPrevAmmo   = ammo;
+
+    if (s_radioN > 0)
+    {
+        s_radioT -= dt;
+        if (s_radioT <= 0.0f)
+        {
+            for (i = 1; i < s_radioN; i++)
+                s_radioQ[i - 1] = s_radioQ[i];
+            s_radioN--;
+            s_radioT = (s_radioN > 0) ? AH_RADIO_TIME : 0.0f;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Zones, chapters, debrief                                            */
+/* ------------------------------------------------------------------ */
+
+static const char* const s_zoneNames[] = {
+    "OLD SILENT HILL",              /* 0 */
+    "CAFE 5TO2",                    /* 1 */
+    "MIDWICH ELEMENTARY SCHOOL",    /* 2 */
+    "OTHERWORLD SCHOOL",            /* 3 */
+    "BALKAN CHURCH",                /* 4 */
+    "CENTRAL SILENT HILL",          /* 5 */
+    "ALCHEMILLA HOSPITAL",          /* 6 */
+    "OTHERWORLD HOSPITAL",          /* 7 */
+    "GREEN LION ANTIQUES",          /* 8 */
+    "OTHERWORLD CENTRAL TOWN",      /* 9 */
+    "CENTRAL SQUARE SHOPPING CENTER", /* 10 */
+    "THE SEWERS",                   /* 11 */
+    "RESORT AREA",                  /* 12 */
+    "ANNIE'S BAR",                  /* 13 */
+    "NORMAN'S MOTEL",               /* 14 */
+    "OTHERWORLD RESORT AREA",       /* 15 */
+    "LAKESIDE PIER",                /* 16 */
+    "THE LIGHTHOUSE",               /* 17 */
+    "LAKESIDE AMUSEMENT PARK",      /* 18 */
+    "NOWHERE",                      /* 19 */
+};
+
+/* e_MapIdx -> zone, -1 for maps with no player-facing name. */
+static const signed char s_mapZone[] = {
+    0, 1, 0,                    /* MAP0 S00..S02 */
+    2, 2, 3, 3, 2, 2, 2,        /* MAP1 S00..S06 */
+    0, 4, 5, 5, 5,              /* MAP2 S00..S04 */
+    6, 6, 6, 7, 7, 7, 6,        /* MAP3 S00..S06 */
+    -1, 8, 9, 10, 6, 9, -1,     /* MAP4 S00..S06 */
+    11, 12, 13, 14,             /* MAP5 S00..S03 */
+    15, 16, 17, 11, 18, -1,     /* MAP6 S00..S05 */
+    19, 19, 19, 19,             /* MAP7 S00..S03 */
+};
+
+/* MAPn of an e_MapIdx: the game's own chapter split. The story does not walk
+ * them in order (the town is MAP2, the school after it MAP1). */
+static int Ah_Chapter(int map)
+{
+    static const signed char first[] = { 0, 3, 10, 15, 22, 29, 33, 39, 43 };
+    int c;
+    for (c = 0; c < 8; c++)
+        if (map >= first[c] && map < first[c + 1])
+            return c;
+    return -1;
+}
+
+static int Ah_IsBoss(int charaId)
+{
+    return charaId == Chara_SplitHead || charaId == Chara_Floatstinger || charaId == Chara_Twinfeeler ||
+           charaId == Chara_Bloodsucker || charaId == Chara_Incubus || charaId == Chara_MonsterCybil;
+}
+
+static void Ah_StatsNow(s_AhStats* s)
+{
+    s->timer = Ah_Q12f(g_SavegamePtr->gameplayTimer);
+    s->kills = (int)g_SavegamePtr->meleeKillCount + (int)g_SavegamePtr->rangedKillCount;
+    s->fired = g_SavegamePtr->firedShotCount;
+    s->hits  = g_SavegamePtr->closeRangeShotCount + g_SavegamePtr->midRangeShotCount +
+               g_SavegamePtr->longRangeShotCount;
+}
+
+/* Accuracy is worth up to 60 points and kills up to 40 (4 each). A mission
+ * fought with no shot fired gets three quarters of the accuracy points. */
+static char Ah_Rank(int kills, int fired, int hits)
+{
+    float acc = (fired > 0) ? (float)hits / (float)fired : 0.75f;
+    float pts = (acc > 1.0f ? 1.0f : acc) * 60.0f + (kills > 10 ? 10 : kills) * 4.0f;
+
+    if (pts >= 85.0f) return 'S';
+    if (pts >= 70.0f) return 'A';
+    if (pts >= 50.0f) return 'B';
+    return 'C';
+}
+
+static void Ah_Debrief(int always)
+{
+    s_AhStats now;
+
+    Ah_StatsNow(&now);
+    /* A stretch with nothing fought, like the opening walk, has nothing to grade. */
+    if (!always && now.kills == s_statsStart.kills && now.fired == s_statsStart.fired)
+    {
+        s_statsStart = now;
+        return;
+    }
+    s_debrief.time  = now.timer - s_statsStart.timer;
+    s_debrief.kills = now.kills - s_statsStart.kills;
+    s_debrief.fired = now.fired - s_statsStart.fired;
+    s_debrief.hits  = now.hits - s_statsStart.hits;
+    s_debrief.rank  = Ah_Rank(s_debrief.kills, s_debrief.fired, s_debrief.hits);
+    s_debriefT      = AH_DEBRIEF_TIME;
+    s_statsStart    = now;
+    SH_DBG("[FLIGHTHUD] debrief: %d kills, %d/%d hits, rank %c", s_debrief.kills, s_debrief.hits,
+           s_debrief.fired, s_debrief.rank);
+}
+
+static void Ah_ZoneTick(float dt)
+{
+    const int map = g_SavegamePtr->mapIdx;
+    s_AhStats now;
+    int       zone, chapter;
+
+    Ah_StatsNow(&now);
+    /* Counters running backwards mean another save was loaded: start over
+     * from it, and do not greet its map as a new zone. */
+    if (!s_statsValid || now.timer < s_lastTimer || now.kills < s_statsStart.kills ||
+        now.fired < s_statsStart.fired)
+    {
+        s_statsStart = now;
+        s_statsValid = 1;
+        s_prevMap    = -1;
+    }
+    s_lastTimer = now.timer;
+
+    if (s_debriefT > 0.0f)
+        s_debriefT -= dt;
+
+    zone    = (map >= 0 && map < (int)sizeof(s_mapZone)) ? s_mapZone[map] : -1;
+    chapter = Ah_Chapter(map);
+
+    if (map != s_prevMap)
+    {
+        if (s_prevMap >= 0)
+        {
+            if (chapter >= 0 && !(s_chapterSeen & (1u << chapter)))
+            {
+                if (s_missionBoss)
+                    s_statsStart = now;
+                else
+                    Ah_Debrief(0);
+                s_missionBoss = 0;
+            }
+            if (zone >= 0 && !(s_zoneSeen & (1u << zone)))
+                s_bannerPending = zone;
+        }
+        if (zone >= 0)
+            s_zoneSeen |= 1u << zone;
+        if (chapter >= 0)
+            s_chapterSeen |= 1u << chapter;
+        s_prevMap = map;
+    }
+
+    if (s_bannerPending >= 0 && s_debriefT <= 0.0f)
+    {
+        s_bannerZone    = s_bannerPending;
+        s_bannerPending = -1;
+        s_bannerT       = AH_BANNER_TIME;
+        Ah_Radio(AH_RC_ZONE);
+    }
+    if (s_bannerT > 0.0f)
+        s_bannerT -= dt;
+}
+
+static void Ah_OnKill(const s_SubCharacter* npc)
+{
+    s_AhKill* k = &s_kills[s_killNext];
+
+    k->x   = Ah_Q12f(npc->position.vx + npc->collision.shapeOffsets.box.vx);
+    k->y   = Ah_Q12f(npc->position.vy + npc->collision.box.offsetY);
+    k->z   = Ah_Q12f(npc->position.vz + npc->collision.shapeOffsets.box.vz);
+    k->age = 0.0f;
+    s_killNext = (s_killNext + 1) % AH_KILL_MAX;
+
+    if (g_PcConfig.flightHudSound)
+        SD_Call(Sfx_MenuConfirm);
+
+    if (Ah_IsBoss(npc->model.charaId))
+    {
+        Ah_Radio(AH_RC_BOSS);
+        Ah_Debrief(1);
+        s_missionBoss = 1;
+    }
+    else
+    {
+        Ah_Radio(AH_RC_KILL);
+    }
+}
+
 static void Ah_TryLaunch(void)
 {
     if (s_salvoLeft > 0)
@@ -306,6 +659,8 @@ static void Ah_TryLaunch(void)
     }
 
     s_flareStock--;
+    if (s_flareStock == 0)
+        Ah_Radio(AH_RC_FLARE);
     s_salvoLeft = AH_SALVO_PAIRS;
     s_salvoT    = 0.0f;
     s_jamT      = AH_JAM_TIME;
@@ -321,18 +676,32 @@ static void Ah_LockScan(float dt)
     const float cone = AH_LOCK_CONE / 360.0f;
     int i;
 
-    s_anyTrack = s_anyLock = 0;
+    s_anyTrack = s_anyLock = s_danger = 0;
 
     for (i = 0; i < NPC_COUNT_MAX; i++)
     {
         const s_SubCharacter* npc = &g_SysWork.npcs[i];
+        const int alive = Ah_IsEnemy(npc->model.charaId) && npc->health > Q12(0.0f);
         int   tracking = 0;
 
         if (s_lockChara[i] != npc->model.charaId)
         {
             s_lockChara[i] = npc->model.charaId;
             s_lockT[i]     = 0.0f;
+            s_wasAlive[i]  = 0;
         }
+
+        /* Same slot, same monster, health just ran out: that is a kill, not
+         * a slot being freed (that clears charaId) or reused. */
+        if (s_wasAlive[i] && !alive && Ah_IsEnemy(npc->model.charaId))
+            Ah_OnKill(npc);
+        if (alive)
+        {
+            float hp = Ah_Q12f(npc->health);
+            if (!s_wasAlive[i] || hp > s_hpMax[i])
+                s_hpMax[i] = hp;
+        }
+        s_wasAlive[i] = alive;
 
         if (Ah_NpcLive(npc) && s_jamT <= 0.0f && pl->health > Q12(0.0f))
         {
@@ -340,6 +709,7 @@ static void Ah_LockScan(float dt)
             float dz = Ah_Q12f(pl->position.vz - npc->position.vz);
             float dist = sqrtf(dx * dx + dz * dz);
 
+            s_lockDist[i] = dist;
             if (dist < AH_LOCK_RANGE)
             {
                 float to   = atan2f(dx, dz) / (2.0f * AH_PI);
@@ -371,8 +741,16 @@ static void Ah_LockScan(float dt)
         else
             s_lockState[i] = 0;
 
-        if (s_lockState[i] == 2) s_anyLock = 1;
-        else if (s_lockState[i] == 1) s_anyTrack = 1;
+        if (s_lockState[i] == 2)
+        {
+            s_anyLock = 1;
+            if (s_lockDist[i] < AH_DANGER_RANGE)
+                s_danger = 1;
+        }
+        else if (s_lockState[i] == 1)
+        {
+            s_anyTrack = 1;
+        }
     }
 
     s_alert = s_anyLock;
@@ -393,7 +771,7 @@ static void Ah_Tones(float dt)
         s_beepT = 0.0f;
     s_prevAnyLock = s_anyLock;
 
-    period = s_anyLock ? 0.16f : 0.55f;
+    period = s_danger ? 0.08f : (s_anyLock ? 0.16f : 0.55f);
     s_beepT -= dt;
     if (s_beepT <= 0.0f)
     {
@@ -467,8 +845,17 @@ void Pc_FlightHud_Update(void)
     if (s_flareMsgT > 0.0f)  s_flareMsgT -= dt;
     if (s_emptyMsgT > 0.0f)  s_emptyMsgT -= dt;
 
+    {
+        int k;
+        for (k = 0; k < AH_KILL_MAX; k++)
+            if (s_kills[k].age < AH_KILL_TIME)
+                s_kills[k].age += dt;
+    }
+
     Ah_FlareSim(dt);
+    Ah_ZoneTick(dt);
     Ah_LockScan(dt);
+    Ah_RadioTick(dt);
     Ah_Tones(dt);
 }
 
@@ -653,6 +1040,8 @@ static const char* const s_glyph[128] = {
     ['|'] = "2026",
     ['='] = "02420444",
     ['\''] = "2021",
+    [','] = "25262617",
+    ['?'] = "0110103030414142422323242526",
 };
 
 #define AH_ADV 5.6f /* grid units per character */
@@ -698,17 +1087,23 @@ static VECTOR3 s_cam;
 static float   s_camH;
 static float   s_halfW; /* PSX units across half the picture (Hor+ widens it) */
 
-/* World (m, game axes) -> HUD units. Returns 0 behind the camera. *outDepth is
- * the view depth in metres, for sizing. */
-static int Ah_Project(float wx, float wy, float wz, float* hx, float* hy, float* outDepth)
+static void Ah_View(float wx, float wy, float wz, float* vx, float* vy, float* vz)
 {
     float dx = wx - Ah_Q12f(s_cam.vx);
     float dy = wy - Ah_Q12f(s_cam.vy);
     float dz = wz - Ah_Q12f(s_cam.vz);
-    float vx = (VbWvsMatrix.m[0][0] * dx + VbWvsMatrix.m[0][1] * dy + VbWvsMatrix.m[0][2] * dz) / 4096.0f;
-    float vy = (VbWvsMatrix.m[1][0] * dx + VbWvsMatrix.m[1][1] * dy + VbWvsMatrix.m[1][2] * dz) / 4096.0f;
-    float vz = (VbWvsMatrix.m[2][0] * dx + VbWvsMatrix.m[2][1] * dy + VbWvsMatrix.m[2][2] * dz) / 4096.0f;
+    *vx = (VbWvsMatrix.m[0][0] * dx + VbWvsMatrix.m[0][1] * dy + VbWvsMatrix.m[0][2] * dz) / 4096.0f;
+    *vy = (VbWvsMatrix.m[1][0] * dx + VbWvsMatrix.m[1][1] * dy + VbWvsMatrix.m[1][2] * dz) / 4096.0f;
+    *vz = (VbWvsMatrix.m[2][0] * dx + VbWvsMatrix.m[2][1] * dy + VbWvsMatrix.m[2][2] * dz) / 4096.0f;
+}
 
+/* World (m, game axes) -> HUD units. Returns 0 behind the camera. *outDepth is
+ * the view depth in metres, for sizing. */
+static int Ah_Project(float wx, float wy, float wz, float* hx, float* hy, float* outDepth)
+{
+    float vx, vy, vz;
+
+    Ah_View(wx, wy, wz, &vx, &vy, &vz);
     if (vz < 0.3f)
         return 0;
     *hx = (vx * s_camH / vz) / s_halfW * s_w2;
@@ -753,6 +1148,24 @@ static const char* Ah_EnemyName(int id)
         case Chara_Incubus:         return "INCUBUS";
         case Chara_MonsterCybil:    return "CYBIL";
         default:                    return "BOGEY";
+    }
+}
+
+/* flight_hud_callsigns: 0 the monster's name, 1 BANDIT once it is tracking
+ * Harry and BOGEY until then, 2 TGT-nn by NPC slot. */
+static const char* Ah_TargetName(int slot)
+{
+    static char num[NPC_COUNT_MAX][8];
+
+    switch (g_PcConfig.flightHudCallsigns)
+    {
+        case 1:
+            return s_lockState[slot] != 0 ? "BANDIT" : "BOGEY";
+        case 2:
+            snprintf(num[slot], sizeof(num[slot]), "TGT-%02d", slot + 1);
+            return num[slot];
+        default:
+            return Ah_EnemyName(g_SysWork.npcs[slot].model.charaId);
     }
 }
 
@@ -817,6 +1230,20 @@ static void Ah_GunReticle(void)
     Ah_Line(-13.0f, 0.0f, -18.0f, 0.0f, s_th);
     Ah_Line(13.0f, 0.0f, 18.0f, 0.0f, s_th);
     Ah_Rect(-1.2f, -1.2f, 1.2f, 1.2f);
+}
+
+/* Remaining health against the most this slot has been seen with: the maximum
+ * differs by monster and difficulty, and the game keeps no copy of it. */
+static void Ah_TargetHpBar(int slot, float cx, float top, float w)
+{
+    float f = (s_hpMax[slot] > 0.0f) ? Ah_Q12f(g_SysWork.npcs[slot].health) / s_hpMax[slot] : 1.0f;
+
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    Ah_UseDim();
+    Ah_Box(cx - w * 0.5f, top, cx + w * 0.5f, top + 5.0f, 1.0f);
+    Ah_UseMain();
+    Ah_Rect(cx - w * 0.5f + 1.5f, top + 1.5f, cx - w * 0.5f + 1.5f + (w - 3.0f) * f, top + 3.5f);
 }
 
 /* Draws every live enemy's container and returns the index of the nearest one
@@ -889,7 +1316,10 @@ static int Ah_Targets(float nowS, int* outShoot)
         snprintf(buf, sizeof(buf), "%d", (int)(dist[i] + 0.5f));
         Ah_Text(buf, x + half + 5.0f, y - half, 6.0f, 0);
         if (i == best)
-            Ah_Text(Ah_EnemyName(g_SysWork.npcs[i].model.charaId), x + half + 5.0f, y - half + 8.0f, 6.0f, 0);
+        {
+            Ah_Text(Ah_TargetName(i), x + half + 5.0f, y - half + 8.0f, 6.0f, 0);
+            Ah_TargetHpBar(i, x, y + half + 8.0f, 26.0f);
+        }
 
         if (i == best && g_SysWork.playerCombat.isAiming && dist[i] < 20.0f &&
             fabsf(x) < 60.0f && fabsf(y) < 60.0f)
@@ -1022,6 +1452,261 @@ static void Ah_Silhouette(float cx, float top, float h)
     Ah_Line(cx + 3.8f * k, top + 34.0f * k, cx + 6.0f * k, top + 57.0f * k, leg);
 }
 
+static void Ah_OffscreenArrows(float nowS)
+{
+    const s_SubCharacter* pl = &g_SysWork.playerWork.player;
+    const float ex = s_w2 - 20.0f, ey = 240.0f - 20.0f;
+    int i;
+
+    for (i = 0; i < NPC_COUNT_MAX; i++)
+    {
+        const s_SubCharacter* npc = &g_SysWork.npcs[i];
+        float wx, wy, wz, dx, dz, dist, vx, vy, vz, len, ux, uy, t, px, py;
+        char  buf[8];
+
+        if (!Ah_NpcLive(npc))
+            continue;
+
+        wx = Ah_Q12f(npc->position.vx + npc->collision.shapeOffsets.box.vx);
+        wz = Ah_Q12f(npc->position.vz + npc->collision.shapeOffsets.box.vz);
+        wy = Ah_Q12f(npc->position.vy + npc->collision.box.offsetY);
+        dx = wx - Ah_Q12f(pl->position.vx);
+        dz = wz - Ah_Q12f(pl->position.vz);
+        dist = sqrtf(dx * dx + dz * dz);
+        if (dist > AH_TARGET_RANGE)
+            continue;
+
+        Ah_View(wx, wy, wz, &vx, &vy, &vz);
+        if (vz >= 0.3f)
+        {
+            dx = (vx * s_camH / vz) / s_halfW * s_w2;
+            dz = (vy * s_camH / vz) * 2.0f;
+            if (fabsf(dx) <= s_w2 - 8.0f && fabsf(dz) <= 232.0f)
+                continue;
+        }
+        else
+        {
+            /* Behind the camera the perspective divide flips the side. */
+            dx = vx * s_camH / s_halfW * s_w2;
+            dz = vy * s_camH * 2.0f;
+        }
+
+        len = sqrtf(dx * dx + dz * dz);
+        if (len < 0.001f)
+        {
+            dx  = 0.0f;
+            dz  = 1.0f;
+            len = 1.0f;
+        }
+        ux = dx / len;
+        uy = dz / len;
+        t  = 1e9f;
+        if (fabsf(ux) > 0.0001f && ex / fabsf(ux) < t) t = ex / fabsf(ux);
+        if (fabsf(uy) > 0.0001f && ey / fabsf(uy) < t) t = ey / fabsf(uy);
+        px = ux * t;
+        py = uy * t;
+
+        if (s_lockState[i] != 0 && fmodf(nowS, 0.3f) < 0.15f)
+            Ah_UseHi();
+        else
+            Ah_UseMain();
+        Ah_Tri(px + ux * 7.0f, py + uy * 7.0f,
+               px - ux * 5.0f - uy * 6.0f, py - uy * 5.0f + ux * 6.0f,
+               px - ux * 5.0f + uy * 6.0f, py - uy * 5.0f - ux * 6.0f);
+        snprintf(buf, sizeof(buf), "%d", (int)(dist + 0.5f));
+        Ah_Text(buf, px - ux * 20.0f, py - uy * 20.0f - 3.25f, 6.5f, 1);
+    }
+}
+
+/* "DESTROYED" over each fresh wreck, and a "+1000" flying to (scoreX, scoreY). */
+static void Ah_KillFx(float scoreX, float scoreY, float nowS)
+{
+    int k;
+
+    for (k = 0; k < AH_KILL_MAX; k++)
+    {
+        const s_AhKill* kk = &s_kills[k];
+        float hx = 0.0f, hy = 0.0f, f;
+        int   seen;
+
+        if (kk->age >= AH_KILL_TIME)
+            continue;
+
+        seen = Ah_Project(kk->x, kk->y, kk->z, &hx, &hy, NULL);
+        Ah_UseHi();
+        if (seen && (kk->age > 0.35f || fmodf(nowS, 0.12f) < 0.08f))
+            Ah_Text("DESTROYED", hx, hy - 22.0f, 9.0f, 1);
+
+        if (kk->age < AH_SCORE_FLY)
+        {
+            f = kk->age / AH_SCORE_FLY;
+            f = f * f;
+            Ah_Text("+1000", hx + (scoreX - hx) * f, (hy - 36.0f) + (scoreY - (hy - 36.0f)) * f, 8.0f, 1);
+        }
+    }
+}
+
+static void Ah_RadioBox(float top)
+{
+    const s_AhRadioLine* m;
+    char  buf[64];
+    float w, h = 32.0f;
+
+    if (s_radioN == 0)
+        return;
+    m = &s_radioLines[s_radioQ[0]];
+    snprintf(buf, sizeof(buf), "<< %s >>", m->line);
+    w = Ah_TextWidth(buf, 8.0f) + 20.0f;
+
+    s_cur = &s_fill;
+    Ah_Color(0.0f, 0.12f, 0.04f, 0.5f * s_main[3]);
+    Ah_Rect(-w * 0.5f, top, w * 0.5f, top + h);
+    s_cur = &s_hud;
+
+    Ah_UseMain();
+    Ah_Box(-w * 0.5f, top, w * 0.5f, top + h, s_th);
+    Ah_Text(buf, 0.0f, top + 18.0f, 8.0f, 1);
+    Ah_UseHi();
+    Ah_Text(m->who, -w * 0.5f + 8.0f, top + 5.0f, 7.0f, 0);
+}
+
+static void Ah_Banner(float cy)
+{
+    const char* zone;
+    float age, open, w;
+
+    if (s_bannerT <= 0.0f || s_bannerZone < 0)
+        return;
+
+    zone = s_zoneNames[s_bannerZone];
+    age  = AH_BANNER_TIME - s_bannerT;
+    open = age / AH_BANNER_EDGE;
+    if (s_bannerT / AH_BANNER_EDGE < open)
+        open = s_bannerT / AH_BANNER_EDGE;
+    if (open > 1.0f) open = 1.0f;
+    if (open < 0.0f) open = 0.0f;
+
+    w = Ah_TextWidth(zone, 11.0f);
+    if (w < Ah_TextWidth("MISSION UPDATE", 9.0f))
+        w = Ah_TextWidth("MISSION UPDATE", 9.0f);
+    w = (w * 0.5f + 16.0f) * open;
+
+    Ah_UseMain();
+    Ah_Line(-w, cy - 20.0f, w, cy - 20.0f, s_th);
+    Ah_Line(-w, cy + 20.0f, w, cy + 20.0f, s_th);
+    if (open >= 1.0f)
+    {
+        Ah_UseHi();
+        Ah_Text("MISSION UPDATE", 0.0f, cy - 15.0f, 9.0f, 1);
+        Ah_UseMain();
+        Ah_Text(zone, 0.0f, cy + 2.0f, 11.0f, 1);
+    }
+}
+
+static void Ah_DebriefPanel(void)
+{
+    const float l = -125.0f, r = 125.0f, top = -128.0f, bot = -8.0f;
+    const s_AhDebrief* d = &s_debrief;
+    Uint32 t = (Uint32)(d->time < 0.0f ? 0.0f : d->time);
+    char   buf[32];
+    int    row;
+    static const char* const label[5] = { "TIME", "SCORE", "KILLS", "SHOTS / HITS", "ACCURACY" };
+
+    if (s_debriefT <= 0.0f)
+        return;
+
+    s_cur = &s_fill;
+    Ah_Color(0.0f, 0.1f, 0.03f, 0.6f * s_main[3]);
+    Ah_Rect(l, top, r, bot);
+    s_cur = &s_hud;
+
+    Ah_UseMain();
+    Ah_Box(l, top, r, bot, s_th);
+    Ah_Text("MISSION COMPLETE", 0.0f, top + 8.0f, 12.0f, 1);
+    Ah_Line(l + 8.0f, top + 26.0f, r - 8.0f, top + 26.0f, s_th);
+
+    for (row = 0; row < 5; row++)
+    {
+        const float y = top + 34.0f + row * 15.0f;
+        switch (row)
+        {
+            case 0: snprintf(buf, sizeof(buf), "%02u:%02u:%02u", t / 3600u, (t / 60u) % 60u, t % 60u); break;
+            case 1: snprintf(buf, sizeof(buf), "%d", d->kills * 1000); break;
+            case 2: snprintf(buf, sizeof(buf), "%d", d->kills); break;
+            case 3: snprintf(buf, sizeof(buf), "%d / %d", d->fired, d->hits); break;
+            default:
+                if (d->fired > 0)
+                    snprintf(buf, sizeof(buf), "%d%%", (int)(100.0f * d->hits / d->fired + 0.5f));
+                else
+                    snprintf(buf, sizeof(buf), "---");
+                break;
+        }
+        Ah_UseDim();
+        Ah_Text(label[row], l + 12.0f, y, 8.0f, 0);
+        Ah_UseMain();
+        Ah_Text(buf, r - 62.0f, y, 8.0f, 2);
+    }
+
+    Ah_UseMain();
+    Ah_Text("RANK", r - 30.0f, top + 34.0f, 8.0f, 1);
+    buf[0] = d->rank;
+    buf[1] = '\0';
+    Ah_UseHi();
+    Ah_Text(buf, r - 30.0f, top + 50.0f, 32.0f, 1);
+}
+
+static void Ah_GradQuad(float ox0, float oy0, float ox1, float oy1, float ix1, float iy1, float ix0, float iy0,
+                        const float* outer, const float* inner)
+{
+    if (s_cur->n + 6 > s_cur->cap)
+        return;
+    Ah_V(ox0, oy0, outer);
+    Ah_V(ox1, oy1, outer);
+    Ah_V(ix1, iy1, inner);
+    Ah_V(ox0, oy0, outer);
+    Ah_V(ix1, iy1, inner);
+    Ah_V(ix0, iy0, inner);
+}
+
+/* Third alarm level: a red pulse along the screen edges. Left out while the
+ * low-health glow is pulsing, so the two reds never stack. */
+static void Ah_DangerEdge(float nowS)
+{
+    const float hp = Ah_Q12f(g_SysWork.playerWork.player.health);
+    const float W = s_w2, H = 240.0f, t = 30.0f;
+    float o[4], in[4];
+
+    if (!s_danger || hp <= 0.0f)
+        return;
+    if (g_PcConfig.lowHealthGlow && hp < 20.0f)
+        return;
+
+    o[0] = 1.0f; o[1] = 0.08f; o[2] = 0.04f;
+    o[3] = (0.25f + 0.75f * (0.5f + 0.5f * sinf(nowS * 2.0f * AH_PI * 3.0f))) * 0.6f *
+           (float)g_PcConfig.flightHudOpacity / 100.0f;
+    memcpy(in, o, sizeof(in));
+    in[3] = 0.0f;
+
+    s_cur = &s_fill;
+    Ah_GradQuad(-W, -H, W, -H, W - t, -H + t, -W + t, -H + t, o, in);
+    Ah_GradQuad(W, -H, W, H, W - t, H - t, W - t, -H + t, o, in);
+    Ah_GradQuad(W, H, -W, H, -W + t, H - t, W - t, H - t, o, in);
+    Ah_GradQuad(-W, H, -W, -H, -W + t, -H + t, -W + t, H - t, o, in);
+    s_cur = &s_hud;
+}
+
+/* The event layer both styles share. radioTop and bannerY place the two boxes
+ * clear of each style's own furniture. */
+static void Ah_Events(float scoreX, float scoreY, float radioTop, float bannerY, float nowS)
+{
+    Ah_DangerEdge(nowS);
+    Ah_OffscreenArrows(nowS);
+    Ah_KillFx(scoreX, scoreY, nowS);
+    Ah_RadioBox(radioTop);
+    Ah_Banner(bannerY);
+    Ah_DebriefPanel();
+}
+
 static void Ah_BuildHud(void)
 {
     const s_SubCharacter* pl = &g_SysWork.playerWork.player;
@@ -1032,7 +1717,7 @@ static void Ah_BuildHud(void)
     float        dmg    = 100.0f - hp;
     float        speedKmh = fabsf(Ah_Q12f(pl->moveSpeed)) * 3.6f;
     float        altFt    = -Ah_Q12f(pl->position.vy) * 3.28f;
-    float        rx;
+    float        rx, scoreX;
     int          tgt, shoot;
     char         buf[96], wName[24], wVal[24];
 
@@ -1067,9 +1752,10 @@ static void Ah_BuildHud(void)
         Ah_Text(buf, x, -224.0f, 8.0f, 0);
         snprintf(buf, sizeof(buf), "SCORE: %d", Ah_Kills() * 1000);
         Ah_Text(buf, x, -210.0f, 8.0f, 0);
+        scoreX = x + Ah_TextWidth(buf, 8.0f) + 24.0f;
         if (tgt >= 0)
         {
-            snprintf(buf, sizeof(buf), "TARGET: %s +1000", Ah_EnemyName(g_SysWork.npcs[tgt].model.charaId));
+            snprintf(buf, sizeof(buf), "TARGET: %s +1000", Ah_TargetName(tgt));
             Ah_Text(buf, x, -196.0f, 8.0f, 0);
         }
     }
@@ -1137,6 +1823,11 @@ static void Ah_BuildHud(void)
             Ah_Line(-w, -96.0f, w, -96.0f, s_th);
             Ah_Line(-w, -62.0f, w, -62.0f, s_th);
         }
+        if (s_danger && fmodf(nowS, 0.25f) < 0.16f)
+        {
+            Ah_UseHi();
+            Ah_Text("EVADE", 0.0f, -55.0f, 11.0f, 1);
+        }
     }
     else if (s_anyTrack)
     {
@@ -1154,6 +1845,9 @@ static void Ah_BuildHud(void)
         Ah_UseMain();
         Ah_Text("NO FLARES", 0.0f, 70.0f, 10.0f, 1);
     }
+
+    /* Touch puts Quick Save / Quick Load in the top band when they are on. */
+    Ah_Events(scoreX, -210.0f, (touch && g_PcConfig.touchQuickSaveLoad) ? -172.0f : -232.0f, 104.0f, nowS);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1254,14 +1948,16 @@ static void Ah_Boresight(void)
 static void Ah_TargetsClassic(float nowS)
 {
     const s_SubCharacter* pl = &g_SysWork.playerWork.player;
-    int i;
+    float hx[NPC_COUNT_MAX], hy[NPC_COUNT_MAX], dist[NPC_COUNT_MAX], depth[NPC_COUNT_MAX];
+    int   vis[NPC_COUNT_MAX];
+    int   i, best = -1;
 
     for (i = 0; i < NPC_COUNT_MAX; i++)
     {
         const s_SubCharacter* npc = &g_SysWork.npcs[i];
-        float wx, wy, wz, hx, hy, depth, dist, dx, dz, half;
-        char  buf[16];
+        float wx, wy, wz, dx, dz;
 
+        vis[i] = 0;
         if (!Ah_NpcLive(npc))
             continue;
 
@@ -1270,15 +1966,28 @@ static void Ah_TargetsClassic(float nowS)
         wy = Ah_Q12f(npc->position.vy + npc->collision.box.offsetY);
         dx = wx - Ah_Q12f(pl->position.vx);
         dz = wz - Ah_Q12f(pl->position.vz);
-        dist = sqrtf(dx * dx + dz * dz);
-        if (dist > AH_TARGET_RANGE)
+        dist[i] = sqrtf(dx * dx + dz * dz);
+        if (dist[i] > AH_TARGET_RANGE)
             continue;
-        if (!Ah_Project(wx, wy, wz, &hx, &hy, &depth))
+        if (!Ah_Project(wx, wy, wz, &hx[i], &hy[i], &depth[i]))
             continue;
-        if (hx < -s_w2 - 40.0f || hx > s_w2 + 40.0f || hy < -280.0f || hy > 280.0f)
+        if (hx[i] < -s_w2 - 40.0f || hx[i] > s_w2 + 40.0f || hy[i] < -280.0f || hy[i] > 280.0f)
             continue;
 
-        half = 260.0f / depth;
+        vis[i] = 1;
+        if (best < 0 || dist[i] < dist[best])
+            best = i;
+    }
+
+    for (i = 0; i < NPC_COUNT_MAX; i++)
+    {
+        float half, below;
+        char  buf[16];
+
+        if (!vis[i])
+            continue;
+
+        half = 260.0f / depth[i];
         if (half < 9.0f)  half = 9.0f;
         if (half > 30.0f) half = 30.0f;
 
@@ -1287,21 +1996,28 @@ static void Ah_TargetsClassic(float nowS)
         else
             Ah_UseMain();
 
-        Ah_Box(hx - half, hy - half, hx + half, hy + half, s_th);
+        Ah_Box(hx[i] - half, hy[i] - half, hx[i] + half, hy[i] + half, s_th);
 
         if (s_lockState[i] == 2)
         {
             float d = half + 7.0f;
-            Ah_Line(hx, hy - d, hx + d, hy, s_th);
-            Ah_Line(hx + d, hy, hx, hy + d, s_th);
-            Ah_Line(hx, hy + d, hx - d, hy, s_th);
-            Ah_Line(hx - d, hy, hx, hy - d, s_th);
+            Ah_Line(hx[i], hy[i] - d, hx[i] + d, hy[i], s_th);
+            Ah_Line(hx[i] + d, hy[i], hx[i], hy[i] + d, s_th);
+            Ah_Line(hx[i], hy[i] + d, hx[i] - d, hy[i], s_th);
+            Ah_Line(hx[i] - d, hy[i], hx[i], hy[i] - d, s_th);
             half = d;
         }
 
-        Ah_Text(Ah_EnemyName(npc->model.charaId), hx, hy - half - 10.0f, 6.5f, 1);
-        snprintf(buf, sizeof(buf), "%d", (int)(dist + 0.5f));
-        Ah_Text(buf, hx, hy + half + 4.0f, 6.5f, 1);
+        Ah_Text(Ah_TargetName(i), hx[i], hy[i] - half - 10.0f, 6.5f, 1);
+        below = hy[i] + half + 4.0f;
+        if (i == best)
+        {
+            Ah_TargetHpBar(i, hx[i], below, 2.0f * half);
+            below += 9.0f;
+            Ah_UseMain();
+        }
+        snprintf(buf, sizeof(buf), "%d", (int)(dist[i] + 0.5f));
+        Ah_Text(buf, hx[i], below, 6.5f, 1);
     }
 }
 
@@ -1397,7 +2113,7 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
     float        dmg    = 100.0f - hp;
     float        speedKmh = fabsf(Ah_Q12f(pl->moveSpeed)) * 3.6f;
     float        altFt    = -Ah_Q12f(pl->position.vy) * 3.28f;
-    float        tapeX;
+    float        tapeX, scoreX;
     char         buf[48], l1[24], l2[24];
 
     (void)vpH;
@@ -1427,6 +2143,7 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
         Ah_Text(buf, s_w2 - 18.0f, -222.0f, 8.0f, 2);
         snprintf(buf, sizeof(buf), "SCORE %06d", Ah_Kills() * 1000);
         Ah_Text(buf, s_w2 - 18.0f, -208.0f, 8.0f, 2);
+        scoreX = s_w2 - 18.0f - Ah_TextWidth(buf, 8.0f) - 24.0f;
     }
 
     Ah_WeaponLines(l1, l2, sizeof(l1));
@@ -1479,6 +2196,11 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
             Ah_Line(-w, -86.0f, w, -86.0f, s_th);
             Ah_Line(-w, -52.0f, w, -52.0f, s_th);
         }
+        if (s_danger && fmodf(nowS, 0.25f) < 0.16f)
+        {
+            Ah_UseHi();
+            Ah_Text("EVADE", 0.0f, -45.0f, 11.0f, 1);
+        }
     }
     else if (s_anyTrack)
     {
@@ -1496,6 +2218,9 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
         Ah_UseMain();
         Ah_Text("NO FLARES", 0.0f, 40.0f, 10.0f, 1);
     }
+
+    /* Below the heading tape, which owns the top band. */
+    Ah_Events(scoreX, -208.0f, -168.0f, 104.0f, nowS);
 
     (void)vpW;
 }
