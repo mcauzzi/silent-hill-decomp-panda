@@ -31,7 +31,8 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'SlickAmogus/silent-hill-decomp'
+    # Upstream, plus this fork, which ships its own Android builds.
+    if: github.repository == 'SlickAmogus/silent-hill-decomp' || github.repository == 'mcauzzi/silent-hill-decomp-panda'
     runs-on: ubuntu-latest
 
     steps:
