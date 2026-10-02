@@ -1111,9 +1111,12 @@ static void Ah_BuildHud(void)
     }
     else
     {
-        /* Touch puts buttons in both bottom corners, so the panels collapse to
-         * one row in the free strip at the bottom centre. */
+        /* Touch puts buttons in the bottom-right corner, so the panels collapse
+         * to one row in the free strip at the bottom centre. The radar stays
+         * bottom-left: the movement stick floats and the HUD takes no touches,
+         * so at worst a thumb covers it while steering. */
         float w;
+        Ah_Radar(-s_w2 + 18.0f, 138.0f, 116.0f, 86.0f, yawT, nowS);
         snprintf(buf, sizeof(buf), "DMG %d%%  %s %s  FLR %d", (int)(dmg + 0.5f), wName, wVal, s_flareStock);
         w = Ah_TextWidth(buf, 8.0f);
         Ah_UseMain();
@@ -1453,8 +1456,11 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
     }
     else
     {
-        /* Touch puts buttons in both bottom corners, so the panels collapse to
-         * one row in the free strip at the bottom centre. */
+        /* Touch puts buttons in the bottom-right corner, so the panels collapse
+         * to one row in the free strip at the bottom centre. The radar stays
+         * bottom-left: the movement stick floats and the HUD takes no touches,
+         * so at worst a thumb covers it while steering. */
+        Ah_RadarClassic(-s_w2 + 65.0f, 180.0f, 45.0f, yawT, nowS);
         snprintf(buf, sizeof(buf), "DMG %d%%", (int)(dmg + 0.5f));
         Ah_UseMain();
         Ah_Text(buf, -12.0f, 214.0f, 8.0f, 2);
