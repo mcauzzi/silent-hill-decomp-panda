@@ -1168,14 +1168,39 @@ static void Ah_Text(const char* s, float x, float y, float size, int align)
 
 static VECTOR3 s_cam;
 static float   s_camH;
-static float   s_halfW; /* PSX units across half the picture (Hor+ widens it) */
-/* In-game the picture is 224 lines, not 240, and the world is drawn shifted
- * down by the anchor offset: both off made the boxes drift from the monsters
- * further from the centre. */
-static float   s_halfH = 112.0f;
-static float   s_ofy;
+/* Projected PSX offsets from the picture centre -> HUD units:
+ * h = s_c + p * s_k. Taken from the ortho the world pass really used, so the
+ * widening, crop and pixel aspect of each device are whatever the renderer
+ * chose; the 4:3 Hor+ guess before it put boxes well off the monsters on
+ * wide phones. */
+static float   s_kx = 1.0f, s_ky = 1.0f, s_cx, s_cy;
 
-extern s32 Pc_WorldAnchorOfy(void);
+extern s32   Pc_WorldAnchorOfy(void);
+extern float g_PsxWorldOrtho[4];
+extern float g_PsxWorldDisp[2];
+extern int   g_PsxWorldOrthoValid;
+
+static void Ah_ScreenMap(float aspect)
+{
+    const float ofy = (float)Pc_WorldAnchorOfy();
+    const float *o = g_PsxWorldOrtho, *d = g_PsxWorldDisp;
+
+    if (g_PsxWorldOrthoValid && o[1] > o[0] && o[3] > o[2] && d[0] > 0.0f && d[1] > 0.0f)
+    {
+        s_kx = 2.0f * s_w2 / (o[1] - o[0]);
+        s_cx = (d[0] * 0.5f - o[0]) * s_kx - s_w2;
+        s_ky = 480.0f / (o[3] - o[2]);
+        s_cy = (d[1] * 0.5f + ofy - o[2]) * s_ky - 240.0f;
+    }
+    else
+    {
+        const float halfH = (g_GameWork.gsScreenHeight > 0) ? g_GameWork.gsScreenHeight * 0.5f : 120.0f;
+        s_kx = s_w2 / (120.0f * aspect);
+        s_cx = 0.0f;
+        s_ky = 240.0f / halfH;
+        s_cy = ofy * s_ky;
+    }
+}
 
 static void Ah_View(float wx, float wy, float wz, float* vx, float* vy, float* vz)
 {
@@ -1196,8 +1221,8 @@ static int Ah_Project(float wx, float wy, float wz, float* hx, float* hy, float*
     Ah_View(wx, wy, wz, &vx, &vy, &vz);
     if (vz < 0.3f)
         return 0;
-    *hx = (vx * s_camH / vz) / s_halfW * s_w2;
-    *hy = (vy * s_camH / vz + s_ofy) * (240.0f / s_halfH);
+    *hx = s_cx + (vx * s_camH / vz) * s_kx;
+    *hy = s_cy + (vy * s_camH / vz) * s_ky;
     if (outDepth)
         *outDepth = vz;
     return 1;
@@ -1569,16 +1594,16 @@ static void Ah_OffscreenArrows(float nowS)
         Ah_View(wx, wy, wz, &vx, &vy, &vz);
         if (vz >= 0.3f)
         {
-            dx = (vx * s_camH / vz) / s_halfW * s_w2;
-            dz = (vy * s_camH / vz + s_ofy) * (240.0f / s_halfH);
+            dx = s_cx + (vx * s_camH / vz) * s_kx;
+            dz = s_cy + (vy * s_camH / vz) * s_ky;
             if (fabsf(dx) <= s_w2 - 8.0f && fabsf(dz) <= 232.0f)
                 continue;
         }
         else
         {
             /* Behind the camera the perspective divide flips the side. */
-            dx = vx * s_camH / s_halfW * s_w2;
-            dz = vy * s_camH * (240.0f / s_halfH);
+            dx = vx * s_camH * s_kx;
+            dz = vy * s_camH * s_ky;
         }
 
         len = sqrtf(dx * dx + dz * dz);
@@ -2574,7 +2599,7 @@ static void Ah_BuildFlares(void)
             px = qx; py = qy; pd = qd;
         }
 
-        rad = 0.14f * s_camH / depth * (240.0f / s_halfH);
+        rad = 0.14f * s_camH / depth * s_ky;
         if (rad < 2.5f)  rad = 2.5f;
         if (rad > 28.0f) rad = 28.0f;
 
@@ -2813,7 +2838,7 @@ static void Ah_HeadOf(const s_SubCharacter* npc, int key, float* wx, float* wy, 
 static void Ah_PortraitCapture(const GLint* vp, float nowS)
 {
     const MATRIX* m = &GsWSMATRIX;
-    const float   H = s_camH, halfW = 120.0f * ((float)vp[2] / (float)vp[3]);
+    const float   H = s_camH;
     const Uint32  now = SDL_GetTicks();
     float camX, camZ, tx, ty, tz;
     GLint prevRead = 0, prevDraw = 0, prevTex = 0, prevUnit = 0;
@@ -2853,9 +2878,9 @@ static void Ah_PortraitCapture(const GLint* vp, float nowS)
         if (vz < 0.6f * 256.0f || vz > 12.0f * 256.0f)
             continue;
 
-        px = (float)vp[0] + ((vx * H / vz) / halfW * 0.5f + 0.5f) * (float)vp[2];
-        py = (float)vp[1] + (0.5f - (vy * H / vz + s_ofy) / s_halfH * 0.5f) * (float)vp[3];
-        r  = (rad * 256.0f * H / vz) / s_halfH * 0.5f * (float)vp[3];
+        px = (float)vp[0] + (0.5f + (s_cx + (vx * H / vz) * s_kx) / (2.0f * s_w2)) * (float)vp[2];
+        py = (float)vp[1] + (0.5f - (s_cy + (vy * H / vz) * s_ky) / 480.0f) * (float)vp[3];
+        r  = (rad * 256.0f * H / vz) * s_ky / 480.0f * (float)vp[3];
         if (r < 20.0f)
             continue;
         if (px - r < vp[0] || py - r < vp[1] || px + r > vp[0] + vp[2] || py + r > vp[1] + vp[3])
@@ -3561,10 +3586,8 @@ void Pc_FlightHud_Draw(void)
         return;
 
     s_w2    = 240.0f * aspect;
-    s_halfW = 120.0f * aspect;
     s_camH  = (float)ReadGeomScreen();
-    s_halfH = (g_GameWork.gsScreenHeight > 0) ? g_GameWork.gsScreenHeight * 0.5f : 120.0f;
-    s_ofy   = (float)Pc_WorldAnchorOfy();
+    Ah_ScreenMap(aspect);
     vcGetNowCamPos(&s_cam);
     if (s_camH < 1.0f)
         s_camH = 1.0f;
