@@ -145,11 +145,16 @@ int main(int argc, char** argv)
     frame(16.0f/9.0f, "aim.txt", 0);
     g_SysWork.playerCombat.isAiming = 0;
     g_SysWork.playerWork.player.health = Q12(15.0f);
+    s_rechargeT = 6.0f; /* a flare part-way back, so the recharge bar shows */
+    frame(16.0f/9.0f, "recharge.txt", 0);
     g_PcConfig.flightHud = 2;
     frame(16.0f/9.0f, "classic.txt", 0);
     g_PcConfig.flightHud = 1;
     s_touch = 1;
     frame(19.5f/9.0f, "touch.txt", 0);
+    g_PcConfig.flightHud = 2;
+    frame(19.5f/9.0f, "touch_classic.txt", 0);
+    g_PcConfig.flightHud = 1;
     s_touch = 0;
 
     /* A kill a moment ago, the radio talking, one enemy off the right edge

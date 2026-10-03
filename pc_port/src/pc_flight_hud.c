@@ -2270,6 +2270,23 @@ static void Ah_Events(float scoreX, float scoreY, float radioTop, float bannerY,
     Ah_DebriefPanel();
 }
 
+/* Flare recharge: an outlined track so it reads even when it has barely
+ * started filling. Nothing while the rack is full. */
+static void Ah_RechargeBar(float l, float t, float w, float h)
+{
+    float f = s_rechargeT / AH_FLARE_RECHARGE;
+
+    if (s_flareStock >= AH_FLARE_MAX)
+        return;
+    if (f < 0.0f) f = 0.0f;
+    if (f > 1.0f) f = 1.0f;
+    Ah_UseDim();
+    Ah_Box(l, t, l + w, t + h, 0.8f);
+    Ah_UseMain();
+    if (f > 0.0f)
+        Ah_Rect(l + 1.0f, t + 1.0f, l + 1.0f + (w - 2.0f) * f, t + h - 1.0f);
+}
+
 /* ------------------------------------------------------------------ */
 /* First person: pitch ladder and compass tape                         */
 /* ------------------------------------------------------------------ */
@@ -2544,11 +2561,7 @@ static void Ah_BuildHud(void)
         Ah_Text("FLR", colL, 112.0f, size, 0);
         snprintf(buf, sizeof(buf), "%d", s_flareStock);
         Ah_Text(buf, colR, 112.0f, size, 2);
-        if (s_flareStock < AH_FLARE_MAX)
-        {
-            Ah_UseDim();
-            Ah_Rect(colL + 30.0f, 115.0f, colL + 30.0f + 50.0f * (s_rechargeT / AH_FLARE_RECHARGE), 117.0f);
-        }
+        Ah_RechargeBar(colL + 28.0f, 113.0f, colR - colL - 44.0f, 5.0f);
 
         Ah_UseMain();
         Ah_Text("DMG", colL, 128.0f, size, 0);
@@ -2572,6 +2585,10 @@ static void Ah_BuildHud(void)
         if (s_flareMsgT > 0.0f)
             Ah_UseHi();
         Ah_Text(buf, 10.0f, 214.0f, 8.0f, 1);
+        {
+            const float fw = Ah_TextWidth("FLR 4", 8.0f);
+            Ah_RechargeBar(10.0f + w * 0.5f - fw, 224.0f, fw, 4.0f);
+        }
         Ah_HealthColor(hp, nowS);
         Ah_Silhouette(10.0f - w * 0.5f - 14.0f, 196.0f, 30.0f);
     }
@@ -2855,13 +2872,8 @@ static void Ah_FlareLine(float xRight, float y, float size)
         Ah_UseMain();
     Ah_Text(buf, xRight, y, size, 2);
 
-    if (s_flareStock < AH_FLARE_MAX)
-    {
-        w = Ah_TextWidth(buf, size);
-        Ah_UseDim();
-        Ah_Rect(xRight - w, y + size + 3.0f,
-                xRight - w + w * (s_rechargeT / AH_FLARE_RECHARGE), y + size + 5.5f);
-    }
+    w = Ah_TextWidth(buf, size);
+    Ah_RechargeBar(xRight - w, y + size + 3.0f, w, 4.0f);
 }
 
 static void Ah_BuildHudClassic(float vpW, float vpH)
@@ -2935,6 +2947,10 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
         Ah_UseMain();
         Ah_Rect(lx + 2.0f, 180.0f, lx + 2.0f + 106.0f * (hp < 0.0f ? 0.0f : (hp > 100.0f ? 1.0f : hp / 100.0f)), 184.0f);
 
+        Ah_HealthColor(hp, nowS);
+        Ah_Silhouette(lx + 150.0f, 118.0f, 72.0f);
+        Ah_UseMain();
+
         Ah_Text(l1, wx, 146.0f, 9.0f, 2);
         if (l2[0])
             Ah_Text(l2, wx, 162.0f, 9.0f, 2);
@@ -2952,9 +2968,12 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
         snprintf(buf, sizeof(buf), "DMG %d%%", (int)(dmg + 0.5f));
         Ah_UseMain();
         Ah_Text(buf, -12.0f, 214.0f, 8.0f, 2);
+        Ah_HealthColor(hp, nowS);
+        Ah_Silhouette(-12.0f - Ah_TextWidth(buf, 8.0f) - 14.0f, 196.0f, 30.0f);
+        Ah_UseMain();
         snprintf(buf, sizeof(buf), "%s %s", l1, l2);
         Ah_Text(buf, 12.0f, 214.0f, 8.0f, 0);
-        Ah_FlareLine(Ah_TextWidth("FLR 4", 8.0f) * 0.5f, 198.0f, 8.0f);
+        Ah_FlareLine(Ah_TextWidth("FLR 4", 8.0f) * 0.5f, 194.0f, 8.0f);
     }
 
     if (s_alert && pl->health > Q12(0.0f))

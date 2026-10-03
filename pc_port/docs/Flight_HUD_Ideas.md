@@ -27,7 +27,7 @@ nelle scene d'intermezzo. Si sceglie con **Flight HUD** nel menu rapido
 | | `SHOOT` | Compare sotto il mirino se stai mirando e il bersaglio più vicino è lì, entro 20 m. |
 | In basso a sinistra | Radar quadrato | Harry è il triangolo al centro, rivolto in alto. I triangoli rossi sono i mostri (fino a 25 m). N/E/S/W ruotano mentre Harry gira. |
 | In basso a destra | `> HANDGUN 12/40` | Arma in mano, colpi nel caricatore / colpi di riserva. Per le armi corpo a corpo `---`. |
-| | `FLR 4` | Flare disponibili (massimo 4). Sotto, una barretta che si riempie: dopo 10 s torna un flare. |
+| | `FLR 4` | Flare disponibili (massimo 4). Accanto, una barra bordata che si riempie: dopo 10 s torna un flare. Su telefono sta sotto `FLR` nella riga in basso. |
 | | `DMG 28%` | Danno subito: 100 meno la salute di Harry. |
 | | Harry in wireframe | Il modello vero di Harry a fil di ferro, fermo in piedi e girato di tre quarti. Verde (salute ≥ 75), giallo (≥ 50), arancione (≥ 25), rosso lampeggiante (sotto 25). Se il modello non è disponibile, la sagoma stilizzata di prima. |
 
@@ -124,7 +124,8 @@ nella prima posa della loro animazione. Richiede `global_chara_pool = 1`
 
 Stesse funzioni con un altro aspetto: nastro della bussola in alto, nastri
 scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
-`DMG` con barra della salute in basso a sinistra, niente sagoma.
+`DMG` con barra della salute in basso a sinistra e Harry in wireframe accanto
+(su telefono accanto a `DMG` nella riga in basso).
 
 ### Opzioni
 
