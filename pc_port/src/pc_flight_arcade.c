@@ -85,6 +85,7 @@ static int       s_roundNext;
 static int       s_gunTrigger;
 static unsigned  s_gunRng = 0x9E3779B9u;
 static int       s_mslReq;
+static int       s_gunTouch;
 
 extern int g_PcConsoleInputActive;
 
@@ -499,6 +500,11 @@ void Pc_FlightArcade_MissileRequest(void)
     s_mslReq = 1;
 }
 
+void Pc_FlightArcade_GunTouch(int held)
+{
+    s_gunTouch = held;
+}
+
 unsigned int Pc_FlightArcade_RemapPad(unsigned int held)
 {
     s_gunTrigger = 0;
@@ -706,7 +712,7 @@ void Pc_FlightArcade_Update(float dt)
 
     Ar_HarryLaunch(claimed);
     {
-        const int trigger = s_gunTrigger && g_SysWork.playerWork.player.health > Q12(0.0f) &&
+        const int trigger = (s_gunTrigger || s_gunTouch) && g_SysWork.playerWork.player.health > Q12(0.0f) &&
                             !g_PcConsoleInputActive && !g_PcQuickOptionsActive;
         Ar_GunFire(Af_GunTick(&s_gun, trigger, dt));
     }

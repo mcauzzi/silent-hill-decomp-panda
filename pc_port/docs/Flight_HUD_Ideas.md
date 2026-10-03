@@ -156,9 +156,10 @@ Spenta di default: senza, l'HUD è solo scena. Accesa (e con l'HUD attivo):
     di X. Il passo laterale destro su R1 non c'è più in modalità arcade.
   - La rimappatura vale solo in gioco (non in menu, inventario, mappa,
     messaggi) e non tocca la configurazione dei tasti salvata.
-  - **Touch** (stile Context): il pulsante di sparo diventa **M**, sempre
-    visibile in gioco, e lancia il missile sul bersaglio agganciato (senza
-    LOCK ON un bip d'errore). Con il touch la rimappatura X/R1 non si applica:
+  - **Touch** (stile Context): il posto del pulsante di sparo si divide in
+    due pulsanti più piccoli, sempre visibili in gioco: **M** sopra lancia il
+    missile sul bersaglio agganciato (senza LOCK ON un bip d'errore), **G**
+    sotto è la mitragliatrice, tenuto per la raffica. Con il touch la rimappatura X/R1 non si applica:
     i tocchi per interagire restano l'azione. Per sparare con l'arma mirando
     serve One_Button_Fire. Nello stile Gamepad Cerchio fa come sul pad. Senza LOCK ON Cerchio resta
   la torcia. 2 missili, uno torna ogni 12 s; `MSL` accanto a `FLR`,

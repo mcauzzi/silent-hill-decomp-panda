@@ -42,7 +42,7 @@ enum { TR_NONE = 0, TR_MOVE, TR_LOOK, TR_BUTTON, TR_ADVANCE,
 /* Actions the on-screen buttons drive. Indices into s_Buttons. */
 enum { TB_AIM = 0, TB_ITEM, TB_MAP, TB_START, TB_RUN, TB_BACK, TB_FIRE, TB_MENU,
        TB_SKIP,
-       TB_LIGHT, TB_VIEW, TB_CAM, TB_QSAVE, TB_QLOAD, TB_FLARE, TB_COUNT };
+       TB_LIGHT, TB_VIEW, TB_CAM, TB_QSAVE, TB_QLOAD, TB_FLARE, TB_GUN, TB_COUNT };
 
 typedef struct
 {
@@ -112,6 +112,9 @@ static s_TouchButton s_Buttons[TB_COUNT] = {
     /* Flares, only with the flight HUD on. Above Light, left of Map: the
      * one gap in the right-hand cluster a thumb reaches without leaving it. */
     [TB_FLARE] = { 0.760f, 0.470f, 0.058f, 0 },
+    /* Arcade mode's machine gun. Placed at run time with Fire
+     * (Tc_PlaceFireButtons): the two split Fire's spot between them. */
+    [TB_GUN] = { 0.095f, 0.825f, 0.060f, 0 },
 };
 
 typedef struct
@@ -818,6 +821,8 @@ static int Tc_HitButton(float x, float y, float aspect)
             continue;
         if (i == TB_FLARE && !Pc_FlightHud_Enabled())
             continue;
+        if (i == TB_GUN && !Pc_FlightArcade_Active())
+            continue;
 
         float dx = (x - s_Buttons[i].cx) * aspect;
         float dy = (y - s_Buttons[i].cy);
@@ -920,6 +925,22 @@ static int Tc_AltCam(void)
 
 /* Menu's centre plus a fixed gap in HEIGHT units, so the pair keeps its
  * spacing at any aspect. */
+/* Arcade mode splits Fire's spot in two, missile (M) above gun (G); the
+ * rest of the time Fire has it to itself. */
+static void Tc_PlaceFireButtons(void)
+{
+    if (Pc_FlightArcade_Active())
+    {
+        s_Buttons[TB_FIRE].cy = 0.700f;
+        s_Buttons[TB_FIRE].r  = 0.060f;
+    }
+    else
+    {
+        s_Buttons[TB_FIRE].cy = 0.760f;
+        s_Buttons[TB_FIRE].r  = 0.105f;
+    }
+}
+
 static void Tc_PlaceCamButton(float aspect)
 {
     s_Buttons[TB_CAM].cx = s_Buttons[TB_MENU].cx + (0.135f / aspect);
@@ -1049,6 +1070,7 @@ void Pc_Touch_Update(void)
     s_AdvanceHeld = 0;
     s_FireHeld    = 0;
     Tc_PlaceCamButton(aspect);
+    Tc_PlaceFireButtons();
 
     if (Tc_GamepadStyle())
     {
@@ -1517,6 +1539,7 @@ void Pc_Touch_Update(void)
             if (mslNow && !s_mslWas)
                 Pc_FlightArcade_MissileRequest();
             s_mslWas = mslNow;
+            Pc_FlightArcade_GunTouch((mode == TC_MODE_GAMEPLAY) && s_Buttons[TB_GUN].holdFrames > 0);
             if (s_Buttons[TB_AIM].holdFrames > 0 && g_PcConfig.oneButtonCombat)
                 Tc_PressAction(&s_PadWord, cfg->action);
         }
@@ -1793,6 +1816,7 @@ static const s_TcGlyph s_TcFont[] = {
     { 'E', { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F } },
     { 'F', { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10 } },
     { 'M', { 0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11 } },
+    { 'G', { 0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F } },
     { 'C', { 0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E } },
     { '1', { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E } },
     { '2', { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F } },
@@ -2180,6 +2204,7 @@ void Pc_Touch_Draw(void)
     }
 
     Tc_PlaceCamButton(Tc_Aspect());
+    Tc_PlaceFireButtons();
 
     for (i = 0; i < TB_COUNT; i++)
     {
@@ -2211,6 +2236,9 @@ void Pc_Touch_Draw(void)
             continue;
 
         if (i == TB_FLARE && (mode != TC_MODE_GAMEPLAY || !Pc_FlightHud_Enabled()))
+            continue;
+
+        if (i == TB_GUN && (mode != TC_MODE_GAMEPLAY || !Pc_FlightArcade_Active()))
             continue;
 
         /* Fire appears with the gun and goes away with it, except in arcade
@@ -2253,6 +2281,12 @@ void Pc_Touch_Draw(void)
         if (i == TB_FIRE && Pc_FlightArcade_Active())
         {
             Tc_LetterButton(&batch, "M", cx, cy, r, lum);
+            continue;
+        }
+
+        if (i == TB_GUN)
+        {
+            Tc_LetterButton(&batch, "G", cx, cy, r, lum);
             continue;
         }
 
