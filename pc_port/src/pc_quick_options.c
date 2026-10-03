@@ -501,7 +501,13 @@ static void qo_locate(int page, int* sec, int* chunk, int* chunks)
         acc += k;
     }
 
-    *sec = 0; *chunk = 0; *chunks = 1;
+    /* The page count follows the View section, which grows or shrinks with the
+     * camera mode, so a page remembered from before a camera switch can be past
+     * the end. Land on the last page, with ITS chunk count: pairing section 0
+     * with chunks = 1 copied all of Graphics into s_mRows and overran it. */
+    *sec    = QO_PAGES - 1;
+    *chunks = qo_sec_chunks(QO_PAGES - 1);
+    *chunk  = *chunks - 1;
 }
 
 static int qo_sec_first(int sec)
@@ -547,7 +553,7 @@ static const QoRowDef* qo_page_rows(int page, int* count)
     src = qo_section_rows(sec, &n);
     qo_chunk_span(n - 2, chunks, chunk, &base, &len);
 
-    for (i = 0; i < len && (base + i) < (n - 2); i++)
+    for (i = 0; i < len && i < QO_M_CONTENT && (base + i) < (n - 2); i++)
         s_mRows[k++] = src[base + i];
 
     memset(&s_mRows[k], 0, sizeof(s_mRows[k]));
