@@ -587,6 +587,30 @@ int g_PcQuickOptionsActive = 0;
 static int s_page;
 static int s_sel;
 
+#if defined(QO_MOBILE)
+/* Where the player IS, as section + chunk. s_page is derived from it, because
+ * the View section's chunk count follows the camera mode: switching camera
+ * (the Controls page's Camera Mode row, the eye button) renumbers every page
+ * after View, and a bare page index then pointed into a different section --
+ * with a latched slider drag carrying on into whatever row sat there. */
+static int s_pageSec, s_pageChunk;
+
+static void qo_resync_page(void)
+{
+    const int chunks = qo_sec_chunks(s_pageSec);
+
+    s_page = qo_sec_first(s_pageSec) + ((s_pageChunk < chunks) ? s_pageChunk : chunks - 1);
+}
+#endif
+
+static const QoRowDef* qo_cur_rows(int* count)
+{
+#if defined(QO_MOBILE)
+    qo_resync_page();
+#endif
+    return qo_page_rows(s_page, count);
+}
+
 /* GL */
 static GLuint s_prog, s_vao, s_vbo;
 static GLint  s_locColor;
@@ -1520,7 +1544,7 @@ int Pc_QuickOptions_ShowsMinimapRows(void)
     {
         return 0;
     }
-    rows = qo_page_rows(s_page, &n);
+    rows = qo_cur_rows(&n);
     for (i = 0; i < n; i++)
     {
         if (rows[i].kind == ROW_OPT && rows[i].key != NULL &&
@@ -1623,6 +1647,12 @@ static void qo_set_page(int page)
         const int nPages = qo_page_count();
         s_page = ((page % nPages) + nPages) % nPages;
     }
+#if defined(QO_MOBILE)
+    {
+        int chunks;
+        qo_locate(s_page, &s_pageSec, &s_pageChunk, &chunks);
+    }
+#endif
     qo_page_rows(s_page, &n);
     if (s_sel >= n) s_sel = n - 1;
     if (s_sel < 0)  s_sel = 0;
@@ -1714,7 +1744,7 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
                             int confirm, int close, int pageNext, int pagePrev)
 {
     int nRows;
-    const QoRowDef* rows = qo_page_rows(s_page, &nRows);
+    const QoRowDef* rows = qo_cur_rows(&nRows);
     int mMoved, mClick, mRClick, wheel;
     float mx, my;
 
@@ -2137,7 +2167,7 @@ void Pc_QuickOptions_Draw(void)
     float vpW, vpH, panelW, panelH, panelL, panelR, panelT, panelB;
     float titleH, hintH, listT, listB, listH, rowPitch, rowH, pad, dim = 1.0f;
     int   nRows;
-    const QoRowDef* rows = qo_page_rows(s_page, &nRows);
+    const QoRowDef* rows = qo_cur_rows(&nRows);
     int   px, i;
 
     GLint  prevProg = 0, prevVao = 0, prevBuf = 0, prevTex = 0, prevUnit = GL_TEXTURE0, prevAlign = 4;
