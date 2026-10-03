@@ -1760,7 +1760,7 @@ static void Ah_SeekerMark(float x, float y, float inner, float nowS)
     Ah_Line(x, y + d, x - d, y, s_th);
     Ah_Line(x - d, y, x, y - d, s_th);
     if (f >= 1.0f && fmodf(nowS, 0.4f) < 0.28f)
-        Ah_Text("LOCK ON", x, y - d - 10.0f, 7.0f, 1);
+        Ah_Text("LOCK ON", x, y - d - 20.0f, 7.0f, 1); /* clear of Classic's name over the box */
 }
 
 static void Ah_HitFx(void)
@@ -1775,7 +1775,7 @@ static void Ah_HitFx(void)
 
         if (h->life <= 0.0f || !Ah_Project(h->x, h->y, h->z, &hx, &hy, NULL))
             continue;
-        Ah_Text("HIT", hx, hy - 24.0f - 12.0f * (1.0f - h->life / AH_HITFX_TIME), 8.0f, 1);
+        Ah_Text("HIT", hx, hy - 46.0f - 12.0f * (1.0f - h->life / AH_HITFX_TIME), 8.0f, 1);
     }
     if (s_missT > 0.0f)
     {
