@@ -21,6 +21,25 @@ s32 Pc_WorldAnchorOfy(void) { return 8; }
 int PsyX_RawControllerBindHeld(int b) { return 0; }
 int Pc_Touch_IsDrivingInput(void) { return s_touch; }
 void SD_Call(u32 c) {}
+int g_PcFpsCam;
+int Pc_ScriptOwnsScene(void) { return 0; }
+
+/* First-person view: rows are the camera's right, down and forward axes. */
+static void look(float hDeg, float pDeg, float rollDeg)
+{
+    const float h = hDeg * AH_PI / 180.0f, p = pDeg * AH_PI / 180.0f, a = rollDeg * AH_PI / 180.0f;
+    float f[3] = { sinf(h) * cosf(p), -sinf(p), cosf(h) * cosf(p) };
+    float r[3] = { cosf(h), 0.0f, -sinf(h) };
+    float d[3] = { f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0] };
+    int   k;
+    for (k = 0; k < 3; k++)
+    {
+        GsWSMATRIX.m[0][k] = (short)((r[k] * cosf(a) + d[k] * sinf(a)) * 4096.0f);
+        GsWSMATRIX.m[1][k] = (short)((d[k] * cosf(a) - r[k] * sinf(a)) * 4096.0f);
+        GsWSMATRIX.m[2][k] = (short)(f[k] * 4096.0f);
+    }
+    GsWSMATRIX.t[0] = GsWSMATRIX.t[1] = GsWSMATRIX.t[2] = 0;
+}
 
 static void dump(const char* path)
 {
@@ -181,5 +200,18 @@ int main(int argc, char** argv)
     say(AH_FACE_BIRD, Chara_AirScreamer); frame(16.0f/9.0f, "comm_bird.txt", 0);
     say(AH_FACE_BEAST, Chara_Creeper);    frame(16.0f/9.0f, "comm_beast.txt", 0);
     say(AH_FACE_CHILD, Chara_GreyChild);  frame(16.0f/9.0f, "comm_child.txt", 0);
+
+    /* First person: heading 199, looking 12 degrees up, the head rolled 4. */
+    s_radioN = 0;
+    g_PcFpsCam = 1;
+    look(199.0f, 12.0f, 4.0f);
+    frame(16.0f/9.0f, "fps.txt", 0);
+    g_PcConfig.flightHud = 2;
+    frame(16.0f/9.0f, "fps_classic.txt", 0);
+    g_PcConfig.flightHud = 1;
+    look(47.0f, -20.0f, 0.0f);
+    s_touch = 1; g_PcConfig.touchQuickSaveLoad = 1;
+    say(AH_FACE_CYBIL, 0);
+    frame(19.5f/9.0f, "fps_touch.txt", 0);
     return 0;
 }

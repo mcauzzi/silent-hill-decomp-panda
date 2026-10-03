@@ -2048,6 +2048,193 @@ static void Ah_Events(float scoreX, float scoreY, float radioTop, float bannerY,
     Ah_DebriefPanel();
 }
 
+/* ------------------------------------------------------------------ */
+/* First person: pitch ladder and compass tape                         */
+/* ------------------------------------------------------------------ */
+
+extern int g_PcFpsCam;
+extern int Pc_ScriptOwnsScene(void);
+
+/* The fixed cameras have no pitch to read, so the ladder only exists when the
+ * picture is Harry's own eyes. */
+static int Ah_FirstPerson(void)
+{
+    return g_PcFpsCam && !Pc_ScriptOwnsScene();
+}
+
+/* Heading and pitch of the matrix the world was drawn with, so mouse look and
+ * the head bob both move the ladder exactly as they move the picture. */
+static void Ah_ViewAngles(float* headingDeg, float* pitchDeg)
+{
+    const MATRIX* m  = &GsWSMATRIX;
+    const float   fx = (float)m->m[2][0], fy = (float)m->m[2][1], fz = (float)m->m[2][2];
+    float         h  = atan2f(fx, fz) * (180.0f / AH_PI);
+
+    if (h < 0.0f)
+        h += 360.0f;
+    *headingDeg = h;
+    *pitchDeg   = atan2f(-fy, sqrtf(fx * fx + fz * fz)) * (180.0f / AH_PI);
+}
+
+/* A world direction (game axes, Y down) to its vanishing point in HUD units. */
+static int Ah_ProjectDir(float dx, float dy, float dz, float* hx, float* hy)
+{
+    const MATRIX* m = &GsWSMATRIX;
+    const float   vx = m->m[0][0] * dx + m->m[0][1] * dy + m->m[0][2] * dz;
+    const float   vy = m->m[1][0] * dx + m->m[1][1] * dy + m->m[1][2] * dz;
+    const float   vz = m->m[2][0] * dx + m->m[2][1] * dy + m->m[2][2] * dz;
+
+    if (vz < 0.05f * 4096.0f)
+        return 0;
+    *hx = s_cx + (vx * s_camH / vz) * s_kx;
+    *hy = s_cy + (vy * s_camH / vz) * s_ky;
+    return 1;
+}
+
+static void Ah_PitchDir(float hRad, float pDeg, float* dx, float* dy, float* dz)
+{
+    const float p = pDeg * (AH_PI / 180.0f);
+    *dx = sinf(hRad) * cosf(p);
+    *dy = -sinf(p);
+    *dz = cosf(hRad) * cosf(p);
+}
+
+static void Ah_PitchLadder(float headingDeg, float pitchDeg)
+{
+    const float hRad = headingDeg * (AH_PI / 180.0f);
+    const float rX = cosf(hRad), rZ = -sinf(hRad);
+    const float gap = 24.0f, len = 38.0f, tick = 6.0f;
+    const float winX = 190.0f, winY = 135.0f;
+    char        buf[12];
+    int         p;
+    int         lo = (int)floorf((pitchDeg - 30.0f) / 5.0f) * 5;
+    int         hi = (int)ceilf((pitchDeg + 30.0f) / 5.0f) * 5;
+
+    if (lo < -85) lo = -85;
+    if (hi >  85) hi =  85;
+
+    for (p = lo; p <= hi; p += 5)
+    {
+        float dx, dy, dz, cx, cy, ax, ay, bx, by, tx, ty, nx, ny, tl, ext, side;
+        int   s;
+
+        Ah_PitchDir(hRad, (float)p, &dx, &dy, &dz);
+        if (!Ah_ProjectDir(dx, dy, dz, &cx, &cy))
+            continue;
+        if (fabsf(cx) > winX || fabsf(cy) > winY)
+            continue;
+
+        /* The rung's slant on screen comes from projecting a sideways nudge,
+         * so it tilts with any roll in the view instead of assuming none. */
+        if (!Ah_ProjectDir(dx + rX * 0.05f, dy, dz + rZ * 0.05f, &ax, &ay) ||
+            !Ah_ProjectDir(dx - rX * 0.05f, dy, dz - rZ * 0.05f, &bx, &by))
+            continue;
+        tx = ax - bx;
+        ty = ay - by;
+        tl = sqrtf(tx * tx + ty * ty);
+        if (tl < 0.001f)
+            continue;
+        tx /= tl;
+        ty /= tl;
+        if (tx < 0.0f)
+        {
+            tx = -tx;
+            ty = -ty;
+        }
+        nx = -ty;
+        ny = tx;
+
+        if (p == 0)
+        {
+            Ah_UseMain();
+            ext = gap + len * 2.6f;
+            Ah_Line(cx + tx * gap, cy + ty * gap, cx + tx * ext, cy + ty * ext, s_th);
+            Ah_Line(cx - tx * gap, cy - ty * gap, cx - tx * ext, cy - ty * ext, s_th);
+            continue;
+        }
+
+        Ah_UseMain();
+        ext = gap + len;
+        for (s = -1; s <= 1; s += 2)
+        {
+            /* Ticks point at the horizon: down above it, up below it. */
+            const float tk = (p > 0) ? tick : -tick;
+            const float ox = cx + tx * ext * s, oy = cy + ty * ext * s;
+
+            side = (float)s;
+            if (p > 0)
+            {
+                Ah_Line(cx + tx * gap * side, cy + ty * gap * side, ox, oy, s_th);
+            }
+            else
+            {
+                int k;
+                for (k = 0; k < 3; k++)
+                {
+                    const float d0 = gap + len * (k / 3.0f), d1 = d0 + len * 0.2f;
+                    Ah_Line(cx + tx * d0 * side, cy + ty * d0 * side,
+                            cx + tx * d1 * side, cy + ty * d1 * side, s_th);
+                }
+            }
+            Ah_Line(ox, oy, ox + nx * tk, oy + ny * tk, s_th);
+
+            snprintf(buf, sizeof(buf), "%d", p < 0 ? -p : p);
+            Ah_Text(buf, ox + tx * 5.0f * side, oy + ty * 5.0f * side - 3.5f, 7.0f, s < 0 ? 2 : 0);
+        }
+    }
+}
+
+static const char* Ah_CardinalOf(int deg)
+{
+    static const char* const names[8] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+    return (deg % 45) == 0 ? names[(deg / 45) % 8] : NULL;
+}
+
+/* Ticks every 5 degrees, the eight compass points and the 15-degree marks
+ * between them labelled, the exact heading boxed in the middle: at 199 the
+ * band reads S, 199, SW. */
+static void Ah_CompassTape(float headingDeg, float cy)
+{
+    const float half = 120.0f, ppd = 3.2f;
+    char        buf[8];
+    int         d;
+    int         base = (int)floorf(headingDeg / 5.0f) * 5;
+
+    for (d = base - 40; d <= base + 40; d += 5)
+    {
+        const float x  = (d - headingDeg) * ppd;
+        const int   dn = ((d % 360) + 360) % 360;
+        const char* lbl;
+
+        if (x < -half || x > half)
+            continue;
+
+        Ah_UseDim();
+        Ah_Line(x, cy, x, cy + ((dn % 15) == 0 ? 8.0f : 4.0f), s_th);
+        if (fabsf(x) < 22.0f)
+            continue;
+        lbl = Ah_CardinalOf(dn);
+        if (lbl)
+        {
+            Ah_UseMain();
+            Ah_Text(lbl, x, cy + 11.0f, 8.0f, 1);
+        }
+        else if ((dn % 15) == 0)
+        {
+            snprintf(buf, sizeof(buf), "%d", dn);
+            Ah_UseDim();
+            Ah_Text(buf, x, cy + 11.0f, 6.0f, 1);
+        }
+    }
+
+    Ah_UseMain();
+    snprintf(buf, sizeof(buf), "%03d", ((int)(headingDeg + 0.5f)) % 360);
+    Ah_Box(-17.0f, cy - 22.0f, 17.0f, cy - 6.0f, s_th);
+    Ah_Text(buf, 0.0f, cy - 18.5f, 9.0f, 1);
+    Ah_Line(0.0f, cy - 6.0f, -4.0f, cy - 1.0f, s_th);
+    Ah_Line(0.0f, cy - 6.0f,  4.0f, cy - 1.0f, s_th);
+}
+
 static void Ah_BuildHud(void)
 {
     const s_SubCharacter* pl = &g_SysWork.playerWork.player;
@@ -2058,7 +2245,8 @@ static void Ah_BuildHud(void)
     float        dmg    = 100.0f - hp;
     float        speedKmh = fabsf(Ah_Q12f(pl->moveSpeed)) * 3.6f;
     float        altFt    = -Ah_Q12f(pl->position.vy) * 3.28f;
-    float        rx, scoreX;
+    const int    fp     = Ah_FirstPerson();
+    float        rx, scoreX, radioTop;
     int          tgt, shoot;
     char         buf[96], wName[24], wVal[24];
 
@@ -2066,6 +2254,18 @@ static void Ah_BuildHud(void)
     if (dmg > 100.0f) dmg = 100.0f;
 
     s_th = 1.4f;
+
+    /* Touch puts Quick Save / Quick Load in the top band when they are on. */
+    radioTop = (touch && g_PcConfig.touchQuickSaveLoad) ? -172.0f : -232.0f;
+    if (fp)
+    {
+        float vh, vp;
+        Ah_ViewAngles(&vh, &vp);
+        Ah_PitchLadder(vh, vp);
+        Ah_CompassTape(vh, -170.0f);
+        if (radioTop > -200.0f)
+            radioTop = -134.0f;
+    }
 
     rx = s_w2 * 0.38f;
     if (rx > 150.0f) rx = 150.0f;
@@ -2187,8 +2387,7 @@ static void Ah_BuildHud(void)
         Ah_Text("NO FLARES", 0.0f, 70.0f, 10.0f, 1);
     }
 
-    /* Touch puts Quick Save / Quick Load in the top band when they are on. */
-    Ah_Events(scoreX, -210.0f, (touch && g_PcConfig.touchQuickSaveLoad) ? -172.0f : -232.0f, 104.0f, nowS);
+    Ah_Events(scoreX, -210.0f, radioTop, 104.0f, nowS);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2463,7 +2662,16 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
 
     s_th = 1.4f;
 
-    Ah_HeadingTape(hdg);
+    /* In first person the view's own compass takes the tape's place. */
+    if (Ah_FirstPerson())
+    {
+        float vh, vp;
+        Ah_ViewAngles(&vh, &vp);
+        Ah_PitchLadder(vh, vp);
+        Ah_CompassTape(vh, -196.0f);
+    }
+    else
+        Ah_HeadingTape(hdg);
 
     tapeX = s_w2 * 0.55f;
     if (tapeX > 190.0f) tapeX = 190.0f;
@@ -2815,7 +3023,7 @@ static void Ah_HeadOf(const s_SubCharacter* npc, int key, float* wx, float* wy, 
 
     *rad = 0.32f;
     if (key == Chara_Cybil)
-        up = 1.52f;
+        up = 1.60f;
     else
     {
         switch (Ah_FaceOf(key))
@@ -3414,7 +3622,12 @@ static int Ah_ModelPortraitRender(int key, int monster, float nowS)
         return 0;
     tx /= topN;
     tz /= topN;
-    ty = minY + h * 0.2f;
+    /* Bone origins are joints: the highest one on a person is the neck, so a
+     * point below it framed the chest. The face sits just above. */
+    if (key == Chara_Cybil || Ah_FaceOf(key) == AH_FACE_HUMAN || Ah_FaceOf(key) == AH_FACE_CHILD)
+        ty = minY - h * 0.04f;
+    else
+        ty = minY + h * 0.2f;
     half = h * 0.24f;
     if (half < 0.22f) half = 0.22f;
     if (half > 0.8f)  half = 0.8f;

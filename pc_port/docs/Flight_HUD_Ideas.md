@@ -35,6 +35,23 @@ Su telefono, con i controlli touch, la colonna in basso a destra diventa una
 riga in basso al centro (`DMG 74%  HANDGUN 8/0  FLR 4` con la sagoma accanto),
 perché quell'angolo è occupato dai pulsanti.
 
+### In prima persona
+
+Solo con la telecamera in prima persona (non nelle scene d'intermezzo):
+
+- **Scala di beccheggio** al centro: una linea ogni 5° con i gradi ai due capi,
+  piene sopra l'orizzonte e tratteggiate sotto, con le stanghette rivolte
+  verso l'orizzonte. L'orizzonte è la linea lunga senza numeri. Sale e scende
+  con lo sguardo e si inclina se la vista si inclina (movimento della testa).
+  Si vedono circa ±15° attorno a dove guardi.
+- **Nastro della bussola** in alto: la direzione dello sguardo in gradi nel
+  riquadro, i punti cardinali (N, NE, E, SE, S, SW, W, NW) e i gradi ogni 15°
+  ai lati. Guardando a 199° si legge `S 199 SW`.
+- Nello stile Classic il nastro della bussola prende il posto del suo nastro
+  della direzione, che segue invece il corpo di Harry.
+- Su telefono con Quick Save / Quick Load attivi, il riquadro radio scende sotto
+  il nastro.
+
 ### Sui mostri
 
 - Ogni mostro entro 40 m e inquadrato ha un **riquadrino** con `TGT` sopra e
@@ -130,6 +147,8 @@ scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
 | 6 | MISSION COMPLETE | [~] |
 | 7 | Barra salute del bersaglio | [~] |
 | 8 | Callsign | [~] |
+| 9 | Scala di beccheggio e nastro della bussola (prima persona) | [~] |
+| 10 | Ritratto di Cybil centrato sul volto (era sul petto) | [~] |
 
 ### Da provare in gioco
 
@@ -144,6 +163,10 @@ scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
 - [ ] Uccisione: DESTROYED, +1000, SCORE che sale.
 - [ ] Uscita dal bar verso la città: MISSION UPDATE.
 - [ ] Fine di un capitolo o un boss: MISSION COMPLETE con voto.
+- [ ] Prima persona: la linea dell'orizzonte coincide con l'orizzonte vero
+      della scena? Il nastro segna la stessa direzione del radar quando Harry
+      cammina?
+- [ ] Ritratto di Cybil (3D e ritaglio): ora si vede il volto?
 
 Se un elemento è nel posto sbagliato o non si capisce, annotarlo qui con uno
 screenshot.
@@ -156,15 +179,15 @@ screenshot.
 - Indicatore di direzione verso l'obiettivo della zona (porta/chiave), se si
   riesce a leggerlo dai flag evento.
 - Testi dell'HUD tradotti (oggi solo inglese).
-- **Indicatore di beccheggio e bussola, solo in prima persona.** Al centro una
-  scala di beccheggio: linee inclinate ogni 5° con i gradi a fianco, che salgono
-  e scendono con lo sguardo e ruotano se la vista si inclina, più la linea
-  dell'orizzonte. In alto un nastro della bussola come `S 199 SW` (direzione
-  in gradi e punto cardinale), sopra la scala. Fuori dalla prima persona non
-  compaiono: con le telecamere fisse del gioco il beccheggio non ha senso.
-  In prima persona il nastro sostituisce quello dello stile Classic, così non
-  ce ne sono due. Dati: direzione e inclinazione della vista in prima persona
-  (sguardo del mouse/stick più il movimento della testa, se attivo).
+- **Tono d'allarme generato a runtime**, come l'avviso radar (RWR) di un caccia:
+  due toni alternati veloci (~900/1200 Hz) per WARNING, impulsi a ~1 kHz,
+  circa 8 al secondo, per MISSILE ALERT, un ululato che sale e scende tra 800
+  e 1600 Hz per EVADE. Oggi il bip è `Sfx_MenuMove`. Il nodo è come suonarlo:
+  su Android SDL2 regge un solo dispositivo audio, quindi `pc_ui_sound.c` (che
+  ne apre uno suo) non va bene. Strade: una funzione esterna nel mixer di
+  PsyCross (`RenderAudio` in `PsyX_SPUSoftware.cpp`, è un submodule), oppure il
+  campione convertito in ADPCM e caricato nella RAM SPU con `SdSpuMalloc` e
+  suonato su una voce, senza rubarla al driver audio del gioco.
 
 ---
 
@@ -239,6 +262,11 @@ Rendering ibrido:
     pochi simboli: aggiungere glifi lì se servono).
   - Proiezione mondo → HUD: `Ah_Project` (metri, assi di gioco, Y verso il basso).
   - Stili: Modern = `Ah_BuildHud`, Classic = `Ah_BuildHudClassic`.
+  - Prima persona: `Ah_FirstPerson` (`g_PcFpsCam` e nessuna scena scriptata),
+    `Ah_ViewAngles` legge direzione e beccheggio da `GsWSMATRIX`,
+    `Ah_PitchLadder` proietta le direzioni dei gradini con `Ah_ProjectDir`
+    (punti di fuga, quindi spaziatura e inclinazione sono quelle vere della
+    vista), `Ah_CompassTape` disegna il nastro.
   - Layout touch: ramo `touch` (`Pc_Touch_IsDrivingInput()`) in entrambi i build.
   - Ritratti: `Ah_PortraitCapture` proietta la testa con `GsWSMATRIX` (la
     matrice con cui è stato disegnato il frame, quindi vale anche nelle scene
@@ -280,5 +308,6 @@ $CMD -Wno-unused-label -o harness harness.c -lSDL2 -lm -Wl,--unresolved-symbols=
 
 Produce `normal.png`, `alert.png`, `flare.png`, `aim.png`, `classic.png`,
 `touch.png`, `events.png` / `events_classic.png`, `danger.png`, `banner.png`,
-`debrief.png`, `comm_*.png`. Lo sfondo è finto: serve solo a controllare
+`debrief.png`, `comm_*.png`, `fps.png` / `fps_classic.png` / `fps_touch.png`
+(prima persona). Lo sfondo è finto: serve solo a controllare
 layout e colori.
