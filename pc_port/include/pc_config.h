@@ -276,6 +276,9 @@ typedef struct {
      * nobody wants under a stray thumb. Config key: touch_quicksave_buttons. */
     int   touchQuickSaveLoad;
     float touchLookSensitivity; /* touch look speed multiplier, 0.1..4.0 (config key: touch_look_sensitivity); default 1.0 */
+    int   gyroAim;              /* gyro aim: 0 off, 1 while aiming, 2 always (config key: gyro_aim); phones default 1, desktop 0 */
+    float gyroSensitivity;      /* gyro aim: view turn per device turn, 0.25..6.0 (config key: gyro_sensitivity); default 2.0 */
+    int   gyroInvertY;          /* gyro aim: 1 flips the vertical axis (config key: gyro_invert_y) */
     int   oneButtonCombat;  /* 1 = Aim also fires, so combat is one thumb (config key: one_button_combat) */
     int altButtonSprint;    /* "Always use button based sprinting": 1 = walk by default, sprint ONLY while the bound run control is held — applies to alt cameras (TPS/OTS/FPS) AND 2D control under any camera; 0 = a near-full stick push also sprints (config key: altcam_button_sprint) */
     int immersiveFpsHeadTracking; /* 1 = FPS view direction follows Harry's animated head-bone rotation (idle sway/lean), mouse layered on top (config key: immersive_fps_head_tracking) */

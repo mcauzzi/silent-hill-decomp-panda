@@ -246,6 +246,8 @@ static const char* const LBL_FHUD[]   = { "Off", "Modern", "Classic" };
 #if defined(SH_IOS) || defined(__ANDROID__)
 static const int VAL_FHNAME[] = { 0, 1, 2 };
 static const char* const LBL_FHNAME[] = { "Names", "Callsigns", "Numbered" };
+static const int VAL_GYRO[]   = { 0, 1, 2 };
+static const char* const LBL_GYRO[]   = { "Off", "Aiming", "Always" };
 #endif
 
 static const int RES_W[] = { 640, 1280, 1366, 1600, 1920, 2560, 3840 };
@@ -458,6 +460,11 @@ static const s_PcOpt PCOPT_M[] = {
     /* Config-only on desktop: the HUD page there is at the row ceiling. */
     { "Target_Labels",     &g_PcConfig.flightHudCallsigns, "flight_hud_callsigns",  VAL_FHNAME, 3, LBL_FHNAME, NULL, 1, PCK_INT },
     { "Portrait_3D",       &g_PcConfig.flightHudPortrait3d, "flight_hud_portrait_3d", VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
+    /* Config-only on desktop, where every page is full; there it is a pad's
+     * gyroscope, here the phone's own. */
+    { "Gyro_Aim",          &g_PcConfig.gyroAim,           "gyro_aim",            VAL_GYRO,   3, LBL_GYRO,   NULL, 1, PCK_INT },
+    { "Gyro_Speed",        NULL, "gyro_sensitivity",      NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.gyroSensitivity, NULL, 0.25f, 6.0f, 0.25f },
+    { "Invert_Gyro_Y",     &g_PcConfig.gyroInvertY,       "gyro_invert_y",       VAL_ONOFF,  2, LBL_ONOFF,  NULL, 1, PCK_INT },
     /* Mobile only, because a phone has no launcher: everywhere else the
      * launcher owns the account and the game just consumes its token. */
     { "Achievements",      NULL,                          NULL,                  NULL,       0, NULL,       NULL, 0, PCK_RALOGIN },
