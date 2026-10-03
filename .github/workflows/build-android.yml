@@ -22,6 +22,11 @@ on:
   pull_request:
     branches: [android-port]
   workflow_dispatch:
+    inputs:
+      crash_offsets:
+        description: 'libmain.so offsets from a [CRASH] backtrace (arm64), e.g. "0x578084 0x4ef3f8"'
+        required: false
+        default: ''
 
 # One build per branch: pushes land in bursts and a superseded run is wasted
 # runner time.
@@ -145,3 +150,16 @@ jobs:
           path: android_port/app/build/intermediates/cxx/**/obj/*/libmain.so
           if-no-files-found: error
           retention-days: 90
+
+      - name: Resolve crash offsets
+        if: ${{ inputs.crash_offsets != '' }}
+        env:
+          OFFSETS: ${{ inputs.crash_offsets }}
+        run: |
+          set -eu
+          SO=$(find android_port/app/build/intermediates/cxx -path '*/obj/arm64-v8a/libmain.so' | head -1)
+          A2L=$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/27.3.13750724" -name llvm-addr2line -type f | head -1)
+          for off in $OFFSETS; do
+            echo "== $off"
+            "$A2L" -f -C -i -a -e "$SO" "$off"
+          done
