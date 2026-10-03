@@ -134,3 +134,14 @@ jobs:
           path: android_port/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 90
+
+      # The APK's libmain.so is stripped, so a [CRASH] backtrace from a player's
+      # log names only exported symbols. These keep the debug info:
+      #   llvm-addr2line -f -C -i -e libmain.so 0x<offset>
+      - name: Upload unstripped native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: SilentHill-android-symbols
+          path: android_port/app/build/intermediates/cxx/**/obj/*/libmain.so
+          if-no-files-found: error
+          retention-days: 90
