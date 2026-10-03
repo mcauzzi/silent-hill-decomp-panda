@@ -255,6 +255,9 @@ int main(int argc, char** argv)
     s_hurtT = 0.5f; s_hurtAmt = 1.0f;
     g_SysWork.playerWork.player.health = Q12(18.0f);
     frame(16.0f/9.0f, "hurt.txt", 0);
+    g_PcConfig.flightHud = 2;
+    frame(16.0f/9.0f, "hurt_classic.txt", 0);
+    g_PcConfig.flightHud = 1;
     s_hitFx[0].life = 0.0f; s_missT = 0.0f; s_hurtT = 0.0f;
     g_SysWork.playerWork.player.health = 0;
     s_dead = 1; s_deadT = 1.0f;
