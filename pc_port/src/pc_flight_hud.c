@@ -90,6 +90,13 @@ extern GLuint GR_ScreenReadFBO(void);
 #define AH_BANNER_TIME     3.5f
 #define AH_BANNER_EDGE     0.35f /* s the banner rules take to open / close */
 #define AH_DEBRIEF_TIME    7.0f
+#define AH_SEEK_TIME       0.6f  /* s the seeker takes to close onto the auto-aim target */
+#define AH_HITFX_MAX       6
+#define AH_HITFX_TIME      0.6f  /* s "HIT" / "MISS" stay up */
+#define AH_MISS_WAIT       0.4f  /* s after a shot with no damage dealt before it is a miss */
+#define AH_HURT_TIME       0.7f  /* s the HUD breaks up after Harry is hit */
+#define AH_LOW_HEALTH     25.0f
+#define AH_DEAD_FAIL       0.6f  /* s of static before MISSION FAILED */
 
 #define AH_GRAVITY         5.5f  /* m/s^2, +Y is down */
 #define AH_FLARE_DRAG      0.6f
@@ -133,6 +140,28 @@ static int   s_danger;
 static float s_lockDist[NPC_COUNT_MAX];
 static int   s_wasAlive[NPC_COUNT_MAX];
 static float s_hpMax[NPC_COUNT_MAX];
+static float s_npcHpPrev[NPC_COUNT_MAX];
+
+static int   s_seekSlot = -1;
+static float s_seekT;
+
+typedef struct
+{
+    float x, y, z;
+    float life;
+} s_AhHitFx;
+
+static s_AhHitFx s_hitFx[AH_HITFX_MAX];
+static int       s_hitFxNext;
+static float     s_missT;
+static float     s_shotWait;
+static int       s_prevFired = -1;
+static int       s_hitSinceShot;
+static float     s_hurtT, s_hurtAmt;
+static float     s_prevHp = -1.0f;
+static int       s_dead;
+static float     s_deadT;
+static float     s_jx, s_jy; /* HUD shake while it breaks up */
 
 typedef struct
 {
@@ -156,6 +185,7 @@ enum
     AH_RC_ZONE,
     AH_RC_BOSS,
     AH_RC_TAUNT, /* the monster that just locked on, on an open channel */
+    AH_RC_DOWN,  /* Harry is dead */
     AH_RC_COUNT
 };
 
@@ -193,6 +223,8 @@ static const s_AhRadioLine s_radioLines[] = {
     { AH_RC_ZONE,  AH_FACE_CYBIL, "CYBIL", "NEW AREA. KEEP YOUR EYES OPEN." },
     { AH_RC_ZONE,  AH_FACE_CYBIL, "CYBIL", "I DON'T LIKE THE LOOK OF THIS PLACE." },
     { AH_RC_BOSS,  AH_FACE_CYBIL, "CYBIL", "IT'S DOWN! GOOD WORK, HARRY." },
+    { AH_RC_DOWN,  AH_FACE_CYBIL, "CYBIL", "HARRY! HARRY, RESPOND!" },
+    { AH_RC_DOWN,  AH_FACE_CYBIL, "CYBIL", "HARRY, DO YOU READ? HARRY!" },
     { AH_RC_TAUNT, AH_FACE_DOG,   NULL,    "GRRRRR... RAWR!" },
     { AH_RC_TAUNT, AH_FACE_DOG,   NULL,    "ARF! ARF! GRRRAAAH!" },
     { AH_RC_TAUNT, AH_FACE_BIRD,  NULL,    "SKREEEEEEEE!" },
@@ -723,6 +755,99 @@ static void Ah_OnKill(const s_SubCharacter* npc)
     }
 }
 
+static void Ah_OnHit(const s_SubCharacter* npc)
+{
+    s_AhHitFx* h = &s_hitFx[s_hitFxNext];
+
+    h->x    = Ah_Q12f(npc->position.vx + npc->collision.shapeOffsets.box.vx);
+    h->y    = Ah_Q12f(npc->position.vy + npc->collision.box.offsetY);
+    h->z    = Ah_Q12f(npc->position.vz + npc->collision.shapeOffsets.box.vz);
+    h->life = AH_HITFX_TIME;
+    s_hitFxNext = (s_hitFxNext + 1) % AH_HITFX_MAX;
+}
+
+/* Runs before the lock scan: a shot this frame opens the miss window, and any
+ * damage the scan sees (this frame or the next few) closes it. */
+static void Ah_CombatTick(float dt)
+{
+    const s_SubCharacter* pl = &g_SysWork.playerWork.player;
+    const int   fired = g_SavegamePtr->firedShotCount;
+    const int   w     = g_SavegamePtr->equippedWeapon;
+    const float hp    = Ah_Q12f(pl->health);
+    int         k, slot = -1;
+
+    for (k = 0; k < AH_HITFX_MAX; k++)
+        if (s_hitFx[k].life > 0.0f)
+            s_hitFx[k].life -= dt;
+    if (s_missT > 0.0f)
+        s_missT -= dt;
+
+    if (s_shotWait > 0.0f)
+    {
+        if (s_hitSinceShot)
+            s_shotWait = 0.0f;
+        else
+        {
+            s_shotWait -= dt;
+            if (s_shotWait <= 0.0f)
+                s_missT = AH_HITFX_TIME;
+        }
+    }
+    if (s_prevFired >= 0 && fired > s_prevFired)
+    {
+        s_shotWait     = AH_MISS_WAIT;
+        s_hitSinceShot = 0;
+    }
+    s_prevFired = fired;
+
+    if (s_prevHp >= 0.0f && hp > 0.0f && hp < s_prevHp - 0.01f)
+    {
+        s_hurtT   = AH_HURT_TIME;
+        s_hurtAmt = (s_prevHp - hp) / 25.0f;
+        if (s_hurtAmt < 0.35f) s_hurtAmt = 0.35f;
+        if (s_hurtAmt > 1.0f)  s_hurtAmt = 1.0f;
+    }
+    s_prevHp = hp;
+    if (s_hurtT > 0.0f)
+        s_hurtT -= dt;
+
+    if (hp <= 0.0f)
+    {
+        if (!s_dead)
+        {
+            s_dead  = 1;
+            s_deadT = 0.0f;
+            s_radioN = 0;
+            s_radioCool[AH_RC_DOWN] = 0.0f;
+            Ah_Radio(AH_RC_DOWN);
+        }
+        s_deadT += dt;
+    }
+    else
+    {
+        s_dead  = 0;
+        s_deadT = 0.0f;
+    }
+
+    /* The seeker rides the game's own auto-aim pick, so it closes on exactly
+     * what a shot would hit. Firearms only. */
+    if (g_SysWork.playerCombat.isAiming && w >= InvItemId_Handgun && w <= InvItemId_HyperBlaster && hp > 0.0f)
+    {
+        const int t = g_SysWork.targetNpcIdx;
+        if (t >= 0 && t < NPC_COUNT_MAX && Ah_NpcLive(&g_SysWork.npcs[t]))
+            slot = t;
+    }
+    if (slot != s_seekSlot)
+    {
+        s_seekSlot = slot;
+        s_seekT    = 0.0f;
+    }
+    else if (slot >= 0 && s_seekT < AH_SEEK_TIME)
+    {
+        s_seekT += dt;
+    }
+}
+
 static void Ah_TryLaunch(void)
 {
     if (s_salvoLeft > 0)
@@ -767,6 +892,17 @@ static void Ah_LockScan(float dt)
             s_lockChara[i] = npc->model.charaId;
             s_lockT[i]     = 0.0f;
             s_wasAlive[i]  = 0;
+        }
+
+        {
+            const float hpNow = alive ? Ah_Q12f(npc->health) : 0.0f;
+            if (s_wasAlive[i] && hpNow < s_npcHpPrev[i] - 0.01f)
+            {
+                s_hitSinceShot = 1;
+                if (alive)
+                    Ah_OnHit(npc);
+            }
+            s_npcHpPrev[i] = hpNow;
         }
 
         /* Same slot, same monster, health just ran out: that is a kill, not
@@ -858,7 +994,10 @@ enum
     AH_TONE_NONE = 0,
     AH_TONE_TRACK,  /* WARNING: a short two-note warble, twice a second */
     AH_TONE_LOCK,   /* MISSILE ALERT: fast beeps on one note */
-    AH_TONE_LAUNCH  /* EVADE: a continuous siren sweep */
+    AH_TONE_LAUNCH, /* EVADE: a continuous siren sweep */
+    AH_TONE_SEEK,   /* Harry's seeker hunting: a low, fluttering growl */
+    AH_TONE_SEEKLOCK, /* Harry's seeker on: a steady high tone */
+    AH_TONE_LOWHP   /* low health: a slow double beep */
 };
 
 static u32   s_toneAddr;
@@ -1012,10 +1151,13 @@ static void Ah_ToneStart(int mode)
 
 static void Ah_Tones(float dt)
 {
-    int   mode;
-    float t, hz, vol;
+    const float hp = Ah_Q12f(g_SysWork.playerWork.player.health);
+    int         mode;
+    float       t, hz, vol;
 
-    if (!g_PcConfig.flightHudSound)
+    /* Threats first: being shot at outranks aiming, aiming outranks the
+     * health warning. */
+    if (!g_PcConfig.flightHudSound || s_dead)
         mode = AH_TONE_NONE;
     else if (s_danger)
         mode = AH_TONE_LAUNCH;
@@ -1023,6 +1165,10 @@ static void Ah_Tones(float dt)
         mode = AH_TONE_LOCK;
     else if (s_anyTrack)
         mode = AH_TONE_TRACK;
+    else if (s_seekSlot >= 0)
+        mode = s_seekT >= AH_SEEK_TIME ? AH_TONE_SEEKLOCK : AH_TONE_SEEK;
+    else if (hp > 0.0f && hp < AH_LOW_HEALTH)
+        mode = AH_TONE_LOWHP;
     else
         mode = AH_TONE_NONE;
 
@@ -1038,7 +1184,9 @@ static void Ah_Tones(float dt)
     }
     if (s_toneMode != mode)
     {
-        /* No room for the wave: the menu tick as before. */
+        /* No room for the wave: the menu tick as before, for threats only. */
+        if (mode >= AH_TONE_SEEK)
+            return;
         s_beepT -= dt;
         if (s_beepT <= 0.0f)
         {
@@ -1067,6 +1215,21 @@ static void Ah_Tones(float dt)
             hz  = 1000.0f;
             vol = (fmodf(t, 0.125f) < 0.07f) ? 1.0f : 0.0f;
             break;
+        case AH_TONE_SEEK:
+            hz  = 400.0f + 30.0f * sinf(t * 2.0f * AH_PI * 6.0f);
+            vol = 0.45f + 0.2f * sinf(t * 2.0f * AH_PI * 11.0f);
+            break;
+        case AH_TONE_SEEKLOCK:
+            hz  = 1600.0f;
+            vol = 0.7f;
+            break;
+        case AH_TONE_LOWHP:
+        {
+            const float ph = fmodf(t, 1.4f);
+            hz  = 620.0f;
+            vol = (ph < 0.1f || (ph > 0.18f && ph < 0.28f)) ? 0.6f : 0.0f;
+            break;
+        }
         default:
         {
             const float sw = fmodf(t * 6.0f, 2.0f);
@@ -1152,6 +1315,7 @@ void Pc_FlightHud_Update(void)
 
     Ah_FlareSim(dt);
     Ah_ZoneTick(dt);
+    Ah_CombatTick(dt);
     Ah_LockScan(dt);
     Ah_RadioTick(dt);
     Ah_Tones(dt);
@@ -1197,8 +1361,8 @@ static void Ah_V(float x, float y, const float* c)
     if (s_cur->n >= s_cur->cap)
         return;
     p    = &s_cur->v[s_cur->n * AH_VERT_FLOATS];
-    p[0] = x / s_w2;
-    p[1] = -y / 240.0f;
+    p[0] = (x + s_jx) / s_w2;
+    p[1] = -(y + s_jy) / 240.0f;
     p[2] = c[0]; p[3] = c[1]; p[4] = c[2]; p[5] = c[3];
     s_cur->n++;
 }
@@ -1579,6 +1743,120 @@ static void Ah_TargetHpBar(int slot, float cx, float top, float w)
 /* Draws every live enemy's container and returns the index of the nearest one
  * (the "TGT"), or -1. *outShoot is set when that target sits under the reticle
  * while Harry is aiming. */
+/* Harry's seeker: a diamond that starts wide and closes onto the target box
+ * (inner is that box's half size), then turns red and reads LOCK ON. */
+static void Ah_SeekerMark(float x, float y, float inner, float nowS)
+{
+    float f = s_seekT / AH_SEEK_TIME, d;
+
+    if (f > 1.0f) f = 1.0f;
+    d = 46.0f + (inner + 6.0f - 46.0f) * f;
+    if (f >= 1.0f)
+        Ah_Color(1.0f, 0.25f, 0.2f, s_main[3]);
+    else
+        Ah_UseMain();
+    Ah_Line(x, y - d, x + d, y, s_th);
+    Ah_Line(x + d, y, x, y + d, s_th);
+    Ah_Line(x, y + d, x - d, y, s_th);
+    Ah_Line(x - d, y, x, y - d, s_th);
+    if (f >= 1.0f && fmodf(nowS, 0.4f) < 0.28f)
+        Ah_Text("LOCK ON", x, y - d - 10.0f, 7.0f, 1);
+}
+
+static void Ah_HitFx(void)
+{
+    int k;
+
+    Ah_UseHi();
+    for (k = 0; k < AH_HITFX_MAX; k++)
+    {
+        const s_AhHitFx* h = &s_hitFx[k];
+        float hx, hy;
+
+        if (h->life <= 0.0f || !Ah_Project(h->x, h->y, h->z, &hx, &hy, NULL))
+            continue;
+        Ah_Text("HIT", hx, hy - 24.0f - 12.0f * (1.0f - h->life / AH_HITFX_TIME), 8.0f, 1);
+    }
+    if (s_missT > 0.0f)
+    {
+        Ah_UseMain();
+        Ah_Text("MISS", 0.0f, -34.0f, 9.0f, 1);
+    }
+}
+
+/* Torn scanlines across the picture, k from 0 (none) to 1. */
+static void Ah_Static(float k)
+{
+    const int n = 4 + (int)(14.0f * k);
+    int       i;
+
+    s_cur = &s_fill;
+    for (i = 0; i < n; i++)
+    {
+        const float y = (Ah_Rand() * 2.0f - 1.0f) * 240.0f;
+        const float x = (Ah_Rand() * 2.0f - 1.0f) * s_w2;
+        const float w = (0.2f + Ah_Rand() * 0.8f) * s_w2;
+        Ah_Color(s_main[0], s_main[1], s_main[2], (0.12f + 0.25f * Ah_Rand()) * k * s_main[3]);
+        Ah_Rect(x - w, y, x + w, y + 1.0f + 2.0f * Ah_Rand());
+    }
+    s_cur = &s_hud;
+}
+
+/* Hit: the HUD shakes and tears for a moment. Low health: a slow red warning. */
+static void Ah_Warnings(float nowS)
+{
+    const float hp = Ah_Q12f(g_SysWork.playerWork.player.health);
+
+    if (s_dead)
+        Ah_Static(s_deadT < AH_DEAD_FAIL ? s_deadT / AH_DEAD_FAIL : 1.0f);
+    else if (s_hurtT > 0.0f)
+    {
+        Ah_Static(s_hurtAmt * s_hurtT / AH_HURT_TIME);
+        if (fmodf(nowS, 0.16f) < 0.1f)
+        {
+            Ah_UseHi();
+            Ah_Text("DAMAGE", 0.0f, 88.0f, 10.0f, 1);
+        }
+    }
+    if (hp > 0.0f && hp < AH_LOW_HEALTH && fmodf(nowS, 1.0f) < 0.6f)
+    {
+        Ah_Color(1.0f, 0.25f, 0.2f, s_main[3]);
+        Ah_Text("WARNING: LOW HEALTH", 0.0f, 150.0f, 9.0f, 1);
+    }
+}
+
+static void Ah_RadioBox(float top);
+
+/* Harry is down: the HUD gives way to the failure call and Cybil on the
+ * radio, until the game's own GAME OVER takes the screen. */
+static void Ah_BuildDead(float nowS)
+{
+    const int   touch = Pc_Touch_IsDrivingInput();
+    const float w     = Ah_TextWidth("MISSION FAILED", 22.0f) * 0.5f + 16.0f;
+
+    s_th = 1.4f;
+    Ah_Static(1.0f);
+    Ah_UseMain();
+    Ah_Line(-w, -35.0f, w, -35.0f, s_th);
+    Ah_Line(-w, 9.0f, w, 9.0f, s_th);
+    Ah_Text("MISSION FAILED", 0.0f, -28.0f, 22.0f, 1);
+    if (fmodf(nowS, 0.5f) < 0.3f)
+    {
+        Ah_UseHi();
+        Ah_Text("SIGNAL LOST", 0.0f, 18.0f, 9.0f, 1);
+    }
+    Ah_RadioBox((touch && g_PcConfig.touchQuickSaveLoad) ? -172.0f : -232.0f);
+}
+
+static int Ah_Remaining(void)
+{
+    int i, n = 0;
+    for (i = 0; i < NPC_COUNT_MAX; i++)
+        if (Ah_NpcLive(&g_SysWork.npcs[i]))
+            n++;
+    return n;
+}
+
 static int Ah_Targets(float nowS, int* outShoot)
 {
     const s_SubCharacter* pl = &g_SysWork.playerWork.player;
@@ -1640,6 +1918,11 @@ static int Ah_Targets(float nowS, int* outShoot)
             Ah_Line(x + d, y, x, y + d, s_th);
             Ah_Line(x, y + d, x - d, y, s_th);
             Ah_Line(x - d, y, x, y - d, s_th);
+        }
+        if (i == s_seekSlot)
+        {
+            Ah_SeekerMark(x, y, half + 5.0f, nowS);
+            Ah_UseMain();
         }
 
         Ah_Text(s_lockState[i] == 2 ? "LOCK" : "TGT", x - half - 4.0f, y - half - 8.0f, 6.0f, 2);
@@ -2263,8 +2546,10 @@ static void Ah_DangerEdge(float nowS)
 static void Ah_Events(float scoreX, float scoreY, float radioTop, float bannerY, float nowS)
 {
     Ah_DangerEdge(nowS);
+    Ah_Warnings(nowS);
     Ah_OffscreenArrows(nowS);
     Ah_KillFx(scoreX, scoreY, nowS);
+    Ah_HitFx();
     Ah_RadioBox(radioTop);
     Ah_Banner(bannerY);
     Ah_DebriefPanel();
@@ -2538,6 +2823,11 @@ static void Ah_BuildHud(void)
             snprintf(buf, sizeof(buf), "TARGET: %s +1000", Ah_TargetName(tgt));
             Ah_Text(buf, x, -196.0f, 8.0f, 0);
         }
+        if (Ah_Remaining() > 0)
+        {
+            snprintf(buf, sizeof(buf), "TGT REMAINING: %d", Ah_Remaining());
+            Ah_Text(buf, x, -182.0f, 8.0f, 0);
+        }
     }
 
     Ah_WeaponRow(wName, wVal, sizeof(wName));
@@ -2787,6 +3077,12 @@ static void Ah_TargetsClassic(float nowS)
             half = d;
         }
 
+        if (i == s_seekSlot)
+        {
+            Ah_SeekerMark(hx[i], hy[i], half, nowS);
+            Ah_UseMain();
+        }
+
         Ah_Text(Ah_TargetName(i), hx[i], hy[i] - half - 10.0f, 6.5f, 1);
         below = hy[i] + half + 4.0f;
         if (i == best)
@@ -2927,6 +3223,11 @@ static void Ah_BuildHudClassic(float vpW, float vpH)
         snprintf(buf, sizeof(buf), "SCORE %06d", Ah_Kills() * 1000);
         Ah_Text(buf, s_w2 - 18.0f, -208.0f, 8.0f, 2);
         scoreX = s_w2 - 18.0f - Ah_TextWidth(buf, 8.0f) - 24.0f;
+        if (Ah_Remaining() > 0)
+        {
+            snprintf(buf, sizeof(buf), "TGT REMAINING %d", Ah_Remaining());
+            Ah_Text(buf, s_w2 - 18.0f, -194.0f, 8.0f, 2);
+        }
     }
 
     Ah_WeaponLines(l1, l2, sizeof(l1));
@@ -4230,7 +4531,7 @@ void Pc_FlightHud_Draw(void)
     if (!Ah_InGameplay())
         return;
 
-    red = s_alert && g_SysWork.playerWork.player.health > Q12(0.0f);
+    red = (s_alert && g_SysWork.playerWork.player.health > Q12(0.0f)) || s_dead;
     {
         const float o = (float)g_PcConfig.flightHudOpacity / 100.0f;
         if (red)
@@ -4256,10 +4557,20 @@ void Pc_FlightHud_Draw(void)
     s_cur    = &s_glow;
     Ah_BuildFlares();
     s_cur = &s_hud;
-    if (g_PcConfig.flightHud == 2)
+    s_jx = s_jy = 0.0f;
+    if (s_dead || s_hurtT > 0.0f)
+    {
+        const float amp = s_dead ? 3.0f : 6.0f * s_hurtAmt * s_hurtT / AH_HURT_TIME;
+        s_jx = (Ah_Rand() * 2.0f - 1.0f) * amp;
+        s_jy = (Ah_Rand() * 2.0f - 1.0f) * amp * 0.5f;
+    }
+    if (s_dead && s_deadT >= AH_DEAD_FAIL)
+        Ah_BuildDead((float)SDL_GetTicks() / 1000.0f);
+    else if (g_PcConfig.flightHud == 2)
         Ah_BuildHudClassic(vpW, vpH);
     else
         Ah_BuildHud();
+    s_jx = s_jy = 0.0f;
 
     glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
