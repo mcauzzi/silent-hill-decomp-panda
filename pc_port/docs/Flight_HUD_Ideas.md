@@ -21,6 +21,7 @@ nelle scene d'intermezzo. Si sceglie con **Flight HUD** nel menu rapido
 | In alto a sinistra | `TIME: 00:05:55` | Tempo di gioco della partita (quello del salvataggio). |
 | | `SCORE: 1000` | 1000 punti per ogni mostro ucciso. |
 | | `TARGET: GROANER +1000` | Il mostro più vicino entro 40 m. Assente se non ce ne sono. |
+| | `TGT REMAINING: 3` | Mostri vivi caricati nella zona. Assente se non ce ne sono. |
 | Ai lati del centro | `SPEED` | Velocità di Harry in km/h (0 da fermo). |
 | | `ALT` | Altezza di Harry in piedi rispetto al suolo della mappa (0 al piano terra). |
 | Centro | Mirino tondo | Puramente decorativo; sparisce se miri con il crosshair attivo. |
@@ -60,6 +61,28 @@ Solo con la telecamera in prima persona (non nelle scene d'intermezzo):
   e una **barra della sua salute**.
 - Se il mostro è fuori inquadratura, una **freccia sul bordo dello schermo**
   indica da che parte è, con la distanza.
+
+### Quando miri (armi da fuoco)
+
+- Sul mostro scelto dalla mira automatica del gioco compare un **rombo** largo
+  che in 0,6 s si stringe sul suo riquadro, con un **ronzio basso** che
+  tremola. Quando è chiuso diventa rosso, lampeggia **LOCK ON** e il tono
+  diventa **acuto e fisso**.
+- **HIT** sale dal mostro quando lo colpisci senza ucciderlo (all'uccisione
+  resta DESTROYED). **MISS** sopra il mirino quando un colpo non fa danno a
+  nessuno entro 0,4 s.
+
+### Danno e morte
+
+- Quando Harry viene colpito, l'HUD **trema e si strappa** (scanline) per un
+  attimo, in proporzione al danno, e lampeggia **DAMAGE**.
+- Sotto 25 di salute lampeggia in rosso **WARNING: LOW HEALTH** con un doppio
+  bip lento (se nessun altro tono suona).
+- Quando Harry muore: statica, tutto rosso, poi **MISSION FAILED** e
+  **SIGNAL LOST**, con Cybil alla radio ("HARRY! HARRY, RESPOND!"), finché il
+  GAME OVER del gioco prende lo schermo.
+
+I toni hanno una priorità: allarmi dei mostri, poi seeker, poi salute bassa.
 
 ### Quando un mostro ti punta
 
@@ -157,6 +180,12 @@ scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
 | 10 | Ritratto di Cybil centrato sul volto (era sul petto) | [~] |
 | 11 | Toni d'allarme generati, stile avviso radar (al posto del bip del menu) | [~] |
 | 12 | Harry in wireframe al posto della sagoma | [~] |
+| 13 | Seeker con LOCK ON e toni del seeker | [~] |
+| 14 | HIT / MISS | [~] |
+| 15 | TGT REMAINING | [~] |
+| 16 | HUD che si strappa quando Harry è colpito, DAMAGE | [~] |
+| 17 | WARNING: LOW HEALTH con bip | [~] |
+| 18 | MISSION FAILED alla morte, Cybil alla radio | [~] |
 
 ### Da provare in gioco
 
@@ -179,6 +208,12 @@ scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
       EVADE. Si sentono con ogni renderer audio? La statica della radio
       continua a suonare insieme? Il tono si ferma in pausa, nell'inventario e
       nella mappa? Segue il volume degli effetti?
+- [ ] Seeker: il rombo va sul mostro giusto (quello che colpiresti)? Ronzio,
+      poi tono acuto al LOCK ON?
+- [ ] HIT sui colpi a segno, MISS su quelli a vuoto (fucile a pompa compreso).
+- [ ] Colpo subito: HUD che trema e DAMAGE, senza disturbare troppo.
+- [ ] Morte: MISSION FAILED e Cybil prima del GAME OVER; dopo il continue
+      l'HUD torna normale.
 - [ ] Harry in wireframe: posa giusta (in piedi, braccia lungo i fianchi), non
       a testa in giù o di spalle? Leggibile anche piccolo su telefono?
 
@@ -277,6 +312,12 @@ Rendering ibrido:
     impulsi sono fatti col volume. Si ferma fuori dal gioco anche dal draw,
     perché inventario e mappa non chiamano l'update. Se la RAM SPU non c'è,
     torna il bip del menu.
+  - Combattimento: `Ah_CombatTick` (prima di `Ah_LockScan`) gestisce seeker
+    (`g_SysWork.targetNpcIdx`), finestra del MISS (`firedShotCount`), danno
+    subito e morte; `Ah_LockScan` segna i colpi a segno dal calo di salute
+    dei mostri (`Ah_OnHit`). Disegno: `Ah_SeekerMark`, `Ah_HitFx`,
+    `Ah_Warnings` (strappi con `Ah_Static`, tremolio con `s_jx`/`s_jy` in
+    `Ah_V`), `Ah_BuildDead`.
   - Harry in wireframe: `Ah_WireBuild` mette in posa `g_WorldGfxWork.harryModel`
     sul fotogramma 0 dell'animazione base (Harry fermo), ne estrae i lati
     senza doppioni e li normalizza; `Ah_WireHarry` li disegna al posto di
@@ -328,5 +369,6 @@ $CMD -Wno-unused-label -o harness harness.c -lSDL2 -lm -Wl,--unresolved-symbols=
 Produce `normal.png`, `alert.png`, `flare.png`, `aim.png`, `classic.png`,
 `touch.png`, `events.png` / `events_classic.png`, `danger.png`, `banner.png`,
 `debrief.png`, `comm_*.png`, `fps.png` / `fps_classic.png` / `fps_touch.png`
-(prima persona). Lo sfondo è finto: serve solo a controllare
+(prima persona), `seek.png` / `seeklock.png` / `seeklock_classic.png`,
+`hurt.png`, `dead.png`, `recharge.png`, `touch_classic.png`. Lo sfondo è finto: serve solo a controllare
 layout e colori.

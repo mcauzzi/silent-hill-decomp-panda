@@ -99,7 +99,9 @@ static void frame(float aspect, const char* path, int alert)
     }
     s_hud.n = s_glow.n = s_fill.n = 0;
     s_cur = &s_glow; Ah_BuildFlares();
-    s_cur = &s_hud;  if (g_PcConfig.flightHud == 2) Ah_BuildHudClassic(1920, 1080); else Ah_BuildHud();
+    s_cur = &s_hud;
+    if (s_dead && s_deadT >= AH_DEAD_FAIL) Ah_BuildDead(1.0f);
+    else if (g_PcConfig.flightHud == 2) Ah_BuildHudClassic(1920, 1080); else Ah_BuildHud();
     dump(path);
 }
 
@@ -229,5 +231,35 @@ int main(int argc, char** argv)
     s_touch = 1; g_PcConfig.touchQuickSaveLoad = 1;
     say(AH_FACE_CYBIL, 0);
     frame(19.5f/9.0f, "fps_touch.txt", 0);
+
+    /* Third-person again: seeker closing, then locked; a hit, a miss, Harry
+     * just hurt and low; then Harry down. */
+    g_PcFpsCam = 0; s_touch = 0; g_PcConfig.touchQuickSaveLoad = 0; s_radioN = 0;
+    GsWSMATRIX = VbWvsMatrix;
+    GsWSMATRIX.t[1] = (int)(1.7f * 256); GsWSMATRIX.t[2] = 4 * 256;
+    enemy(0, Chara_Groaner, 0.6f, 8.0f, 0.0f);
+    enemy(1, Chara_GreyChild, -4.0f, 14.0f, 90.0f);
+    enemy(2, Chara_Stalker, 3.5f, 11.0f, 0.0f);
+    g_SysWork.playerWork.player.health = Q12(72.0f);
+    g_SysWork.playerCombat.isAiming = 1;
+    s_seekSlot = 0; s_seekT = 0.25f;
+    frame(16.0f/9.0f, "seek.txt", 0);
+    s_seekT = AH_SEEK_TIME;
+    frame(16.0f/9.0f, "seeklock.txt", 0);
+    g_PcConfig.flightHud = 2;
+    frame(16.0f/9.0f, "seeklock_classic.txt", 0);
+    g_PcConfig.flightHud = 1;
+    s_seekSlot = -1; g_SysWork.playerCombat.isAiming = 0;
+    s_hitFx[0].x = 3.5f; s_hitFx[0].y = -0.9f; s_hitFx[0].z = 11.0f; s_hitFx[0].life = 0.4f;
+    s_missT = 0.3f;
+    s_hurtT = 0.5f; s_hurtAmt = 1.0f;
+    g_SysWork.playerWork.player.health = Q12(18.0f);
+    frame(16.0f/9.0f, "hurt.txt", 0);
+    s_hitFx[0].life = 0.0f; s_missT = 0.0f; s_hurtT = 0.0f;
+    g_SysWork.playerWork.player.health = 0;
+    s_dead = 1; s_deadT = 1.0f;
+    say(AH_FACE_CYBIL, 0);
+    for (i = 0; i < AH_RADIO_LINES; i++) if (s_radioLines[i].cat == AH_RC_DOWN) { s_radioQ[0] = i; break; }
+    frame(16.0f/9.0f, "dead.txt", 1);
     return 0;
 }
