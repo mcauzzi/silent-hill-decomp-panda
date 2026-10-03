@@ -11,6 +11,7 @@ static s_ControllerData s_c0;
 s_ControllerData* const g_Controller0 = &s_c0;
 q19_12 g_DeltaTime = Q12(1.0f / 30.0f);
 s_PcConfig g_PcConfig;
+s_WorldGfxWork g_WorldGfxWork;
 MATRIX VbWvsMatrix;
 MATRIX GsWSMATRIX;
 int g_PcConsoleInputActive, g_PcQuickOptionsActive;
@@ -21,6 +22,16 @@ s32 Pc_WorldAnchorOfy(void) { return 8; }
 int PsyX_RawControllerBindHeld(int b) { return 0; }
 int Pc_Touch_IsDrivingInput(void) { return s_touch; }
 void SD_Call(u32 c) {}
+u32  spu_ch_tbl[24];
+s32  sd_reverb_area_size[10];
+s32  sd_reverb_mode;
+void SdPcHoldVoice(s32 vo) {}
+s16  Sd_GetVolSe(s16 v) { return v; }
+unsigned int SpuSetTransferStartAddr(unsigned int a) { return a; }
+unsigned int SpuWrite(unsigned char* p, unsigned int n) { return n; }
+void SpuSetVoiceAttr(SpuVoiceAttr* a) {}
+void SpuSetKey(int on, unsigned int v) {}
+int  SpuGetKeyStatus(unsigned int v) { return SPU_ON; }
 int g_PcFpsCam;
 int Pc_ScriptOwnsScene(void) { return 0; }
 
