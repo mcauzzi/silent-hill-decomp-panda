@@ -36,6 +36,9 @@
 #include "pc_flight_hud.h"
 #include "pc_flight_missile.h"
 #include "pc_flight_arcade.h"
+#if defined(__ANDROID__) || defined(SH_IOS)
+#include "pc_touch.h"
+#endif
 
 void func_8005DC1C(e_SfxId sfxId, const VECTOR3* pos, q23_8 vol, s32 soundType);
 extern long ReadGeomScreen(void);
@@ -81,6 +84,7 @@ static AfRound   s_rounds[AR_ROUNDS_MAX];
 static int       s_roundNext;
 static int       s_gunTrigger;
 static unsigned  s_gunRng = 0x9E3779B9u;
+static int       s_mslReq;
 
 extern int g_PcConsoleInputActive;
 
@@ -348,8 +352,23 @@ static void Ar_HarryLaunch(int claimed)
     AfVec3          from, to;
     int             slot;
 
-    if (!claimed || !(g_Controller0->clickedBtnFlags & light) || g_PcConsoleInputActive || g_PcQuickOptionsActive)
+    const int       touch = s_mslReq;
+
+    s_mslReq = 0;
+    if (touch)
+    {
+        /* The touch button has no flashlight to fall back to: no lock, no
+         * launch. */
+        if (s_claimSlot < 0 || g_SysWork.npcs[s_claimSlot].health <= Q12(0.0f))
+        {
+            SD_Call(Sfx_MenuError);
+            return;
+        }
+    }
+    else if (!claimed || !(g_Controller0->clickedBtnFlags & light) || g_PcConsoleInputActive || g_PcQuickOptionsActive)
+    {
         return;
+    }
 
     /* The light was gated on last frame's lock, so the press belongs to that
      * target even if the seeker let go of it this frame. */
@@ -475,12 +494,23 @@ void Pc_FlightArcade_DrawWorld(void)
         Ar_SmokeDraw();
 }
 
+void Pc_FlightArcade_MissileRequest(void)
+{
+    s_mslReq = 1;
+}
+
 unsigned int Pc_FlightArcade_RemapPad(unsigned int held)
 {
     s_gunTrigger = 0;
     if (!Pc_FlightArcade_Active() || g_GameWork.gameState != GameState_InGame ||
         g_SysWork.sysState != SysState_Gameplay)
         return held;
+#if defined(__ANDROID__) || defined(SH_IOS)
+    /* The touch overlay presses the action bind for its taps and its own
+     * buttons; turning that into the gun would leave no way to act. */
+    if (Pc_Touch_IsDrivingInput())
+        return held;
+#endif
 
     s_gunTrigger = (held & ControllerFlag_Cross) != 0;
     held &= ~(unsigned int)ControllerFlag_Cross;
@@ -641,6 +671,7 @@ void Pc_FlightArcade_Reset(void)
     memset(&s_gun, 0, sizeof(s_gun));
     s_claim      = 0;
     s_claimSlot  = -1;
+    s_mslReq     = 0;
     s_launchMsgT = s_noMslT = 0.0f;
 }
 

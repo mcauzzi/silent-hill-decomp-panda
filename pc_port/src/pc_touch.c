@@ -29,6 +29,7 @@
 #include "pc_quick_options.h"     /* the button below opens it */
 #include "control_style.h"
 #include "pc_flight_hud.h"
+#include "pc_flight_arcade.h"
 
 #define TC_MAX_FINGERS 8
 
@@ -1507,8 +1508,20 @@ void Pc_Touch_Update(void)
         if (s_Buttons[TB_AIM].holdFrames   > 0) Tc_PressAction(&s_PadWord, cfg->aim);
         /* Fire only counts while the gun is up. One-button combat folds it into
          * Aim itself, for players who would rather not hold two things at once. */
-        if (s_Buttons[TB_AIM].holdFrames > 0 &&
-            (g_PcConfig.oneButtonCombat || s_Buttons[TB_FIRE].holdFrames > 0))
+        if (Pc_FlightArcade_Active())
+        {
+            /* Arcade mode: Fire is the missile launcher, gun up or not. */
+            static int s_mslWas;
+            const int  mslNow = (mode == TC_MODE_GAMEPLAY) && s_Buttons[TB_FIRE].holdFrames > 0;
+
+            if (mslNow && !s_mslWas)
+                Pc_FlightArcade_MissileRequest();
+            s_mslWas = mslNow;
+            if (s_Buttons[TB_AIM].holdFrames > 0 && g_PcConfig.oneButtonCombat)
+                Tc_PressAction(&s_PadWord, cfg->action);
+        }
+        else if (s_Buttons[TB_AIM].holdFrames > 0 &&
+                 (g_PcConfig.oneButtonCombat || s_Buttons[TB_FIRE].holdFrames > 0))
             Tc_PressAction(&s_PadWord, cfg->action);
         if (s_Buttons[TB_ITEM].holdFrames  > 0) Tc_PressAction(&s_PadWord, cfg->item);
         if (s_Buttons[TB_MAP].holdFrames   > 0) Tc_PressAction(&s_PadWord, cfg->map);
@@ -1779,6 +1792,7 @@ static const s_TcGlyph s_TcFont[] = {
     { 'A', { 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 } },
     { 'E', { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F } },
     { 'F', { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10 } },
+    { 'M', { 0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11 } },
     { 'C', { 0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E } },
     { '1', { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E } },
     { '2', { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F } },
@@ -2199,10 +2213,11 @@ void Pc_Touch_Draw(void)
         if (i == TB_FLARE && (mode != TC_MODE_GAMEPLAY || !Pc_FlightHud_Enabled()))
             continue;
 
-        /* Fire appears with the gun and goes away with it. */
+        /* Fire appears with the gun and goes away with it, except in arcade
+         * mode, where it launches missiles and is always there. */
         if (i == TB_FIRE &&
-            (mode != TC_MODE_GAMEPLAY || g_PcConfig.oneButtonCombat ||
-             s_Buttons[TB_AIM].holdFrames <= 0))
+            (mode != TC_MODE_GAMEPLAY ||
+             (!Pc_FlightArcade_Active() && (g_PcConfig.oneButtonCombat || s_Buttons[TB_AIM].holdFrames <= 0))))
             continue;
 
         if (mode != TC_MODE_GAMEPLAY)
@@ -2232,6 +2247,12 @@ void Pc_Touch_Draw(void)
         if (i == TB_FLARE)
         {
             Tc_LetterButton(&batch, "F", cx, cy, r, lum);
+            continue;
+        }
+
+        if (i == TB_FIRE && Pc_FlightArcade_Active())
+        {
+            Tc_LetterButton(&batch, "M", cx, cy, r, lum);
             continue;
         }
 

@@ -15,6 +15,8 @@ int   Pc_FlightArcade_Active(void);
 int   Pc_FlightArcade_ShieldsHarryFrom(const struct _SubCharacter* attacker);
 int   Pc_FlightArcade_ClaimsLightButton(void);
 int   Pc_FlightArcade_MapButton(int clicked, int held);
+/* Launch from a non-pad source (the touch Fire button in arcade mode). */
+void  Pc_FlightArcade_MissileRequest(void);
 void  Pc_FlightArcade_Update(float dt);
 void  Pc_FlightArcade_Reset(void);
 /* World-OT smoke, once this frame's camera is set. */
