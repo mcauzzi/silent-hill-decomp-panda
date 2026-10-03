@@ -43,11 +43,13 @@
 #include <PsyX/PsyX_backend.h>
 #include <libgs.h>
 #include <libgpu.h>
+#include <libspu.h>
 
 #include "bodyprog/view/vw_calc.h"
 #include "bodyprog/view/vw_system.h"
 #include "bodyprog/game_boot/fs_chara_anim.h"
 #include "bodyprog/screen/screen_data.h"
+#include "bodyprog/libsd.h"
 
 #include "sh_log.h"
 #include "pc_config.h"
@@ -126,7 +128,6 @@ static float s_flareMsgT, s_emptyMsgT;
 static int   s_flareReq;
 
 static float s_beepT;
-static int   s_prevAnyLock;
 static int   s_danger;
 
 static float s_lockDist[NPC_COUNT_MAX];
@@ -837,30 +838,244 @@ static void Ah_LockScan(float dt)
     s_alert = s_anyLock;
 }
 
+/* ------------------------------------------------------------------ */
+/* Alarm tone                                                          */
+/* ------------------------------------------------------------------ */
+
+/* A fighter's radar warning tones, made here: one looped stretch of a reedy
+ * wave sits in SPU RAM (the 64 bytes libsd leaves under the reverb area) and
+ * the pitch and volume registers play every pattern on it. It goes through the
+ * game's own SPU, so it is mixed, paused and volume-scaled like any effect on
+ * every renderer and on phones. Voices 22 and 23 are the radio's, so the tone
+ * holds 21, and only while it sounds. */
+#define AH_TONE_VOICE   21
+#define AH_TONE_SAMPLES 112 /* four ADPCM blocks */
+#define AH_TONE_CYCLES  4
+#define AH_TONE_BASE_HZ (44100.0f * AH_TONE_CYCLES / AH_TONE_SAMPLES)
+
+enum
+{
+    AH_TONE_NONE = 0,
+    AH_TONE_TRACK,  /* WARNING: a short two-note warble, twice a second */
+    AH_TONE_LOCK,   /* MISSILE ALERT: fast beeps on one note */
+    AH_TONE_LAUNCH  /* EVADE: a continuous siren sweep */
+};
+
+static u32   s_toneAddr;
+static int   s_toneMode;
+static float s_toneT;
+
+static void Ah_ToneEncode(u8* out)
+{
+    static const int pos[5] = { 0, 60, 115, 98, 122 };
+    static const int neg[5] = { 0, 0, -52, -55, -60 };
+    s16 pcm[AH_TONE_SAMPLES];
+    int s1 = 0, s2 = 0, b, i;
+
+    for (i = 0; i < AH_TONE_SAMPLES; i++)
+    {
+        const float ph = 2.0f * AH_PI * AH_TONE_CYCLES * (float)i / AH_TONE_SAMPLES;
+        const float v  = sinf(ph) + 0.33f * sinf(3.0f * ph) + 0.16f * sinf(5.0f * ph);
+        pcm[i] = (s16)(v * 15000.0f);
+    }
+
+    for (b = 0; b < AH_TONE_SAMPLES / 28; b++)
+    {
+        const s16* src = &pcm[b * 28];
+        u8*        blk = &out[b * 16];
+        double     bestErr = -1.0;
+        int        bestF = 0, bestSh = 0, bestS1 = 0, bestS2 = 0, f, sh;
+        signed char bestQ[28];
+
+        /* The first block is the loop start, where the history is whatever the
+         * tail left, so it must not predict. */
+        for (f = 0; f < (b == 0 ? 1 : 5); f++)
+        {
+            for (sh = 0; sh <= 12; sh++)
+            {
+                const int   step = 1 << (12 - sh);
+                int         p1 = s1, p2 = s2;
+                double      err = 0.0;
+                signed char q[28];
+
+                for (i = 0; i < 28; i++)
+                {
+                    const int pred = (p1 * pos[f] + p2 * neg[f] + 32) >> 6;
+                    int       n    = (int)lrintf((float)(src[i] - pred) / (float)step);
+                    int       dec;
+
+                    if (n < -8) n = -8;
+                    if (n >  7) n =  7;
+                    dec = n * step + pred;
+                    if (dec < -32768) dec = -32768;
+                    if (dec >  32767) dec =  32767;
+                    err += (double)(src[i] - dec) * (double)(src[i] - dec);
+                    q[i] = (signed char)n;
+                    p2 = p1;
+                    p1 = dec;
+                }
+                if (bestErr < 0.0 || err < bestErr)
+                {
+                    bestErr = err;
+                    bestF   = f;
+                    bestSh  = sh;
+                    bestS1  = p1;
+                    bestS2  = p2;
+                    memcpy(bestQ, q, sizeof(q));
+                }
+            }
+        }
+
+        memset(blk, 0, 16);
+        blk[0] = (u8)((bestF << 4) | bestSh);
+        blk[1] = (b == 0) ? 0x04 : (b == AH_TONE_SAMPLES / 28 - 1) ? 0x03 : 0x00;
+        for (i = 0; i < 28; i++)
+            blk[2 + i / 2] |= (u8)((bestQ[i] & 0xF) << ((i & 1) * 4));
+        s1 = bestS1;
+        s2 = bestS2;
+    }
+}
+
+/* The slot follows the reverb mode, so it is checked at every start. */
+static int Ah_ToneUpload(void)
+{
+    u8        wave[AH_TONE_SAMPLES / 28 * 16];
+    const u32 addr = (u32)SD_SPU_ALLOC_TOP;
+
+    if (sizeof(wave) > SD_PC_TONE_BYTES)
+        return 0;
+    if (s_toneAddr == addr)
+        return 1;
+    Ah_ToneEncode(wave);
+    SpuSetTransferStartAddr(addr);
+    if (SpuWrite(wave, sizeof(wave)) != sizeof(wave))
+        return 0;
+    s_toneAddr = addr;
+    return 1;
+}
+
+static void Ah_ToneStop(void)
+{
+    if (s_toneMode == AH_TONE_NONE)
+        return;
+    s_toneMode = AH_TONE_NONE;
+    SdPcHoldVoice(NO_VALUE);
+}
+
+/* Pitch and volume this frame; vol 0 is the gap between beeps. The voice
+ * stays keyed on so the driver's free-voice scans keep passing it by. */
+static void Ah_ToneSet(float hz, float vol)
+{
+    SpuVoiceAttr a;
+    float        se = (float)Sd_GetVolSe(128) / 128.0f;
+    int          p  = (int)(hz / AH_TONE_BASE_HZ * 4096.0f + 0.5f);
+    int          v  = (int)(vol * se * 0x1C00);
+
+    if (p < 1)      p = 1;
+    if (p > 0x3FFF) p = 0x3FFF;
+    memset(&a, 0, sizeof(a));
+    a.voice        = spu_ch_tbl[AH_TONE_VOICE];
+    a.mask         = SPU_VOICE_VOLL | SPU_VOICE_VOLR | SPU_VOICE_PITCH;
+    a.volume.left  = (short)v;
+    a.volume.right = (short)v;
+    a.pitch        = (unsigned short)p;
+    SpuSetVoiceAttr(&a);
+}
+
+static void Ah_ToneStart(int mode)
+{
+    SpuVoiceAttr a;
+
+    if (!Ah_ToneUpload())
+        return;
+    SdPcHoldVoice(AH_TONE_VOICE);
+
+    memset(&a, 0, sizeof(a));
+    a.voice   = spu_ch_tbl[AH_TONE_VOICE];
+    a.mask    = SPU_VOICE_VOLL | SPU_VOICE_VOLR | SPU_VOICE_VOLMODEL | SPU_VOICE_VOLMODER |
+                SPU_VOICE_PITCH | SPU_VOICE_WDSA | SPU_VOICE_LSAX |
+                SPU_VOICE_ADSR_AMODE | SPU_VOICE_ADSR_ADSR1 | SPU_VOICE_ADSR_ADSR2;
+    a.pitch     = 0x1000;
+    a.addr      = s_toneAddr;
+    a.loop_addr = s_toneAddr;
+    /* Attack and release of about a hundredth of a second, so a beep starts
+     * and stops without a click; full sustain in between. */
+    a.adsr1  = (8 << 10) | 0x000F;
+    a.adsr2  = (0x1F << 8) | 0x0008;
+    a.a_mode = 1;
+    SpuSetVoiceAttr(&a);
+    SpuSetKey(SPU_ON, spu_ch_tbl[AH_TONE_VOICE]);
+
+    s_toneMode = mode;
+    s_toneT    = 0.0f;
+}
+
 static void Ah_Tones(float dt)
 {
-    float period;
+    int   mode;
+    float t, hz, vol;
 
-    if (!g_PcConfig.flightHudSound || (!s_anyLock && !s_anyTrack))
+    if (!g_PcConfig.flightHudSound)
+        mode = AH_TONE_NONE;
+    else if (s_danger)
+        mode = AH_TONE_LAUNCH;
+    else if (s_anyLock)
+        mode = AH_TONE_LOCK;
+    else if (s_anyTrack)
+        mode = AH_TONE_TRACK;
+    else
+        mode = AH_TONE_NONE;
+
+    if (mode == AH_TONE_NONE)
     {
-        s_beepT       = 0.0f;
-        s_prevAnyLock = s_anyLock;
+        Ah_ToneStop();
+        return;
+    }
+    if (mode != s_toneMode)
+    {
+        Ah_ToneStop();
+        Ah_ToneStart(mode);
+    }
+    if (s_toneMode != mode)
+    {
+        /* No room for the wave: the menu tick as before. */
+        s_beepT -= dt;
+        if (s_beepT <= 0.0f)
+        {
+            SD_Call(Sfx_MenuMove);
+            s_beepT = mode == AH_TONE_LAUNCH ? 0.08f : (mode == AH_TONE_LOCK ? 0.16f : 0.55f);
+        }
         return;
     }
 
-    if (s_anyLock && !s_prevAnyLock)
-        s_beepT = 0.0f;
-    s_prevAnyLock = s_anyLock;
+    /* Something else keyed the voice off (an all-effects stop): key it again. */
+    if (SpuGetKeyStatus(spu_ch_tbl[AH_TONE_VOICE]) == SPU_OFF)
+        SpuSetKey(SPU_ON, spu_ch_tbl[AH_TONE_VOICE]);
 
-    period = s_danger ? 0.08f : (s_anyLock ? 0.16f : 0.55f);
-    s_beepT -= dt;
-    if (s_beepT <= 0.0f)
+    s_toneT += dt;
+    t = s_toneT;
+    switch (mode)
     {
-        SD_Call(Sfx_MenuMove);
-        s_beepT += period;
-        if (s_beepT <= 0.0f)
-            s_beepT = period;
+        case AH_TONE_TRACK:
+        {
+            const float ph = fmodf(t, 0.6f);
+            hz  = (fmodf(ph, 0.08f) < 0.04f) ? 1150.0f : 900.0f;
+            vol = (ph < 0.24f) ? 0.8f : 0.0f;
+            break;
+        }
+        case AH_TONE_LOCK:
+            hz  = 1000.0f;
+            vol = (fmodf(t, 0.125f) < 0.07f) ? 1.0f : 0.0f;
+            break;
+        default:
+        {
+            const float sw = fmodf(t * 6.0f, 2.0f);
+            hz  = 850.0f + 700.0f * (sw < 1.0f ? sw : 2.0f - sw);
+            vol = 1.0f;
+            break;
+        }
     }
+    Ah_ToneSet(hz, vol);
 }
 
 void Pc_FlightHud_Update(void)
@@ -871,12 +1086,14 @@ void Pc_FlightHud_Update(void)
     if (!Pc_FlightHud_Enabled())
     {
         Ah_ResetLocks();
+        Ah_ToneStop();
         s_flareReq = 0;
         return;
     }
 
     if (!Ah_InGameplay())
     {
+        Ah_ToneStop();
         s_flareReq = 0;
         return;
     }
@@ -1544,11 +1761,16 @@ static void Ah_HealthColor(float hp, float nowS)
 }
 
 /* Harry in place of the aircraft: head, torso, arms, legs. (cx, top), h tall. */
+static int Ah_WireHarry(float cx, float top, float h);
+
 static void Ah_Silhouette(float cx, float top, float h)
 {
     const float k = h / 60.0f;
     const float limb = 4.5f * k, leg = 5.5f * k;
     int i;
+
+    if (Ah_WireHarry(cx, top, h))
+        return;
 
     for (i = 0; i < 8; i++)
     {
@@ -3524,6 +3746,162 @@ static int Ah_ModelBuild(const s_CharaModel* model, GsCOORDINATE2* coords, int b
     return tris;
 }
 
+/* ------------------------------------------------------------------ */
+/* Health figure: Harry's own model as a wireframe                     */
+/* ------------------------------------------------------------------ */
+
+#define AH_WIRE_MAX  4000
+#define AH_WIRE_TURN 0.35f /* rad: a quarter turn short of front-on reads as 3D */
+
+/* Edges in figure space: x centred on 0, y from 0 (head) to 1 (feet). */
+static float          s_wire[AH_WIRE_MAX][4];
+static int            s_wireN;
+static const void*    s_wireLm;
+static const void*    s_wireAnm;
+static int            s_wireMap = -1;
+static GsCOORDINATE2  s_wireCoords[AH_P3D_MAX_BONES];
+
+/* Harry standing still: keyframe 0 of his base animation, the pose the
+ * TransitionToStill loop holds, arms down at his sides. */
+static int Ah_WireBuild(void)
+{
+    static unsigned char seen[AH_P3D_POOL][AH_P3D_POOL / 8];
+    static float         vpool[AH_P3D_POOL][3];
+    const s_CharaModel*  model = &g_WorldGfxWork.harryModel;
+    s_AnmHeader*         anm   = g_CharaModelAnimsData[0].activeAnmHdr;
+    const s_LinkedBone*  lb;
+    const float          ct = cosf(AH_WIRE_TURN), st = sinf(AH_WIRE_TURN);
+    float                minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f, k, mx;
+    VECTOR3              pos  = { 0, 0, 0 };
+    SVECTOR              prot = { 0, 0, 0 };
+    int                  i, n = 0;
+
+    if (model->lmHdr == NULL || model->skeleton.bones_4 == NULL || anm == NULL ||
+        anm->boneCount == 0 || anm->boneCount > AH_P3D_MAX_BONES || anm->keyframeCount == 0)
+        return 0;
+    /* A map load can reload the player model in place (Play As). */
+    if (s_wireLm == model->lmHdr && s_wireAnm == anm && s_wireMap == g_SavegamePtr->mapIdx)
+        return s_wireN > 0;
+    s_wireLm  = model->lmHdr;
+    s_wireAnm = anm;
+    s_wireMap = g_SavegamePtr->mapIdx;
+    s_wireN   = 0;
+
+    Anim_BoneInit(anm, s_wireCoords);
+    Math_MatrixTransform(&pos, &prot, &s_wireCoords[0]);
+    for (i = 0; i < anm->boneCount; i++)
+        s_wireCoords[i].flg = 0;
+    Anim_BoneUpdate(anm, s_wireCoords, 0, 0, Q12(0.0f));
+
+    memset(vpool, 0, sizeof(vpool));
+    for (lb = model->skeleton.bones_4; lb != NULL; lb = lb->next)
+    {
+        const s_ModelHeader* mh = lb->bone.modelInfo.modelHdr;
+        const int            bi = (u8)lb->bone.idx;
+        MATRIX               W;
+        float                R[9], T[3];
+        int                  m;
+
+        if (lb->bone.modelInfo.field_0 < 0 || mh == NULL || bi >= anm->boneCount || Pc_WideLm_IsWide(mh))
+            continue;
+
+        Vw_CoordHierarchyMatrixCompute(&s_wireCoords[bi], &W);
+        for (i = 0; i < 9; i++)
+            R[i] = (float)W.m[i / 3][i % 3] / 4096.0f;
+        T[0] = (float)W.t[0]; T[1] = (float)W.t[1]; T[2] = (float)W.t[2];
+
+        for (m = 0; m < mh->meshCount; m++)
+        {
+            const s_MeshHeader* me = &mh->meshHdrs[m];
+            int j, p;
+
+            for (j = 0; j < me->vertexCount && mh->vertexOffset + j < AH_P3D_POOL; j++)
+            {
+                const float x = me->verticesXy[j].vx, y = me->verticesXy[j].vy, z = me->verticesZ[j];
+                float* o = vpool[mh->vertexOffset + j];
+                o[0] = (R[0] * x + R[1] * y + R[2] * z + T[0]) / 256.0f;
+                o[1] = (R[3] * x + R[4] * y + R[5] * z + T[1]) / 256.0f;
+                o[2] = (R[6] * x + R[7] * y + R[8] * z + T[2]) / 256.0f;
+            }
+
+            /* Pool slots are reused bone to bone, so an edge is only a
+             * duplicate of one seen in the same mesh. */
+            memset(seen, 0, sizeof(seen));
+            for (p = 0; p < me->primitiveCount; p++)
+            {
+                static const int triRing[4] = { 0, 1, 2, 0 }, quadRing[5] = { 0, 1, 3, 2, 0 };
+                const s_Primitive* pr   = &me->primitives[p];
+                const int          quad = pr->field_C[3] != 0xFF;
+                const int*         ring = quad ? quadRing : triRing;
+                const int          ne   = quad ? 4 : 3;
+                int                e;
+
+                for (e = 0; e < ne && n < AH_WIRE_MAX; e++)
+                {
+                    int a = pr->field_C[ring[e]], b = pr->field_C[ring[e + 1]], lo, hi;
+                    const float *va, *vb;
+
+                    lo = a < b ? a : b;
+                    hi = a < b ? b : a;
+                    if (seen[lo][hi >> 3] & (1 << (hi & 7)))
+                        continue;
+                    seen[lo][hi >> 3] |= (unsigned char)(1 << (hi & 7));
+
+                    va = vpool[a];
+                    vb = vpool[b];
+                    s_wire[n][0] = va[0] * ct + va[2] * st;
+                    s_wire[n][1] = va[1];
+                    s_wire[n][2] = vb[0] * ct + vb[2] * st;
+                    s_wire[n][3] = vb[1];
+                    n++;
+                }
+            }
+        }
+    }
+
+    for (i = 0; i < n; i++)
+    {
+        int c;
+        for (c = 0; c < 4; c += 2)
+        {
+            if (s_wire[i][c] < minX)     minX = s_wire[i][c];
+            if (s_wire[i][c] > maxX)     maxX = s_wire[i][c];
+            if (s_wire[i][c + 1] < minY) minY = s_wire[i][c + 1];
+            if (s_wire[i][c + 1] > maxY) maxY = s_wire[i][c + 1];
+        }
+    }
+    if (n == 0 || maxY - minY < 0.3f)
+        return 0;
+
+    k  = 1.0f / (maxY - minY);
+    mx = (minX + maxX) * 0.5f;
+    for (i = 0; i < n; i++)
+    {
+        s_wire[i][0] = (s_wire[i][0] - mx) * k;
+        s_wire[i][1] = (s_wire[i][1] - minY) * k;
+        s_wire[i][2] = (s_wire[i][2] - mx) * k;
+        s_wire[i][3] = (s_wire[i][3] - minY) * k;
+    }
+    s_wireN = n;
+    SH_DBG("[FLIGHT_HUD] health wireframe: %d edges, %.2f m tall", n, maxY - minY);
+    return 1;
+}
+
+static int Ah_WireHarry(float cx, float top, float h)
+{
+    float th = h * 0.011f;
+    int   i;
+
+    if (!Ah_WireBuild())
+        return 0;
+    if (th < 0.5f) th = 0.5f;
+    if (th > 1.0f) th = 1.0f;
+    for (i = 0; i < s_wireN; i++)
+        Ah_Line(cx + s_wire[i][0] * h, top + s_wire[i][1] * h,
+                cx + s_wire[i][2] * h, top + s_wire[i][3] * h, th);
+    return 1;
+}
+
 static void Ah_Mat4Mul(float* o, const float* a, const float* b)
 {
     int r, c, k;
@@ -3778,6 +4156,10 @@ void Pc_FlightHud_Draw(void)
     GLboolean prevBlend, prevDepth, prevCull;
     int   red;
 
+    /* The inventory, the map and the menus leave the game state, and with it
+     * the update, so the tone is cut from here as well. */
+    if (!Ah_InGameplay())
+        Ah_ToneStop();
     if (!Pc_FlightHud_Enabled() || g_PcConsoleInputActive || g_GameWork.gameState != GameState_InGame)
         return;
 

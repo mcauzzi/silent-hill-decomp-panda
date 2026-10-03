@@ -29,10 +29,10 @@ nelle scene d'intermezzo. Si sceglie con **Flight HUD** nel menu rapido
 | In basso a destra | `> HANDGUN 12/40` | Arma in mano, colpi nel caricatore / colpi di riserva. Per le armi corpo a corpo `---`. |
 | | `FLR 4` | Flare disponibili (massimo 4). Sotto, una barretta che si riempie: dopo 10 s torna un flare. |
 | | `DMG 28%` | Danno subito: 100 meno la salute di Harry. |
-| | Sagoma di Harry | Verde (salute ≥ 75), gialla (≥ 50), arancione (≥ 25), rossa lampeggiante (sotto 25). |
+| | Harry in wireframe | Il modello vero di Harry a fil di ferro, fermo in piedi e girato di tre quarti. Verde (salute ≥ 75), giallo (≥ 50), arancione (≥ 25), rosso lampeggiante (sotto 25). Se il modello non è disponibile, la sagoma stilizzata di prima. |
 
 Su telefono, con i controlli touch, la colonna in basso a destra diventa una
-riga in basso al centro (`DMG 74%  HANDGUN 8/0  FLR 4` con la sagoma accanto),
+riga in basso al centro (`DMG 74%  HANDGUN 8/0  FLR 4` con Harry accanto),
 perché quell'angolo è occupato dai pulsanti.
 
 ### In prima persona
@@ -64,13 +64,18 @@ Solo con la telecamera in prima persona (non nelle scene d'intermezzo):
 ### Quando un mostro ti punta
 
 1. Un mostro entro 12 m che guarda verso Harry inizia a "puntarlo": compare
-   **WARNING** al centro, il suo riquadro lampeggia, bip lenti.
+   **WARNING** al centro, il suo riquadro lampeggia, e due volte al secondo si
+   sente un breve trillo su due note.
 2. Se continua a guardarlo per quasi un secondo **ha fatto lock**: lampeggia
    **MISSILE ALERT**, **tutto l'HUD diventa rosso** (anche crosshair e
-   pulsanti touch), bip veloci, e Cybil avvisa via radio. Il mostro sul radar e
-   nel riquadro diventa `LOCK`.
+   pulsanti touch), bip veloci su una nota, circa 8 al secondo, e Cybil avvisa
+   via radio. Il mostro sul radar e nel riquadro diventa `LOCK`.
 3. Se chi ha fatto lock è a meno di 2,5 m compare anche **EVADE**, i bordi
-   dello schermo pulsano di rosso e i bip diventano continui.
+   dello schermo pulsano di rosso e il tono diventa una sirena continua che
+   sale e scende.
+
+I toni sono generati dal gioco stesso (vedi "Dove sta il codice") e seguono il
+volume degli effetti.
 
 La sagoma di Harry resta del colore della sua salute anche quando tutto il
 resto è rosso.
@@ -149,6 +154,8 @@ scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
 | 8 | Callsign | [~] |
 | 9 | Scala di beccheggio e nastro della bussola (prima persona) | [~] |
 | 10 | Ritratto di Cybil centrato sul volto (era sul petto) | [~] |
+| 11 | Toni d'allarme generati, stile avviso radar (al posto del bip del menu) | [~] |
+| 12 | Harry in wireframe al posto della sagoma | [~] |
 
 ### Da provare in gioco
 
@@ -167,6 +174,12 @@ scorrevoli di SPEED e ALT, mirino a "W", radar rotondo in basso a destra,
       della scena? Il nastro segna la stessa direzione del radar quando Harry
       cammina?
 - [ ] Ritratto di Cybil (3D e ritaglio): ora si vede il volto?
+- [ ] Toni: trillo per WARNING, bip veloci per MISSILE ALERT, sirena per
+      EVADE. Si sentono con ogni renderer audio? La statica della radio
+      continua a suonare insieme? Il tono si ferma in pausa, nell'inventario e
+      nella mappa? Segue il volume degli effetti?
+- [ ] Harry in wireframe: posa giusta (in piedi, braccia lungo i fianchi), non
+      a testa in giù o di spalle? Leggibile anche piccolo su telefono?
 
 Se un elemento è nel posto sbagliato o non si capisce, annotarlo qui con uno
 screenshot.
@@ -179,16 +192,6 @@ screenshot.
 - Indicatore di direzione verso l'obiettivo della zona (porta/chiave), se si
   riesce a leggerlo dai flag evento.
 - Testi dell'HUD tradotti (oggi solo inglese).
-- **Tono d'allarme generato a runtime**, come l'avviso radar (RWR) di un caccia:
-  due toni alternati veloci (~900/1200 Hz) per WARNING, impulsi a ~1 kHz,
-  circa 8 al secondo, per MISSILE ALERT, un ululato che sale e scende tra 800
-  e 1600 Hz per EVADE. Oggi il bip è `Sfx_MenuMove`. Il nodo è come suonarlo:
-  su Android SDL2 regge un solo dispositivo audio, quindi `pc_ui_sound.c` (che
-  ne apre uno suo) non va bene. Strade: una funzione esterna nel mixer di
-  PsyCross (`RenderAudio` in `PsyX_SPUSoftware.cpp`, è un submodule), oppure il
-  campione convertito in ADPCM e caricato nella RAM SPU con `SdSpuMalloc` e
-  suonato su una voce, senza rubarla al driver audio del gioco.
-
 ---
 
 ## Idee di gameplay
@@ -262,6 +265,21 @@ Rendering ibrido:
     pochi simboli: aggiungere glifi lì se servono).
   - Proiezione mondo → HUD: `Ah_Project` (metri, assi di gioco, Y verso il basso).
   - Stili: Modern = `Ah_BuildHud`, Classic = `Ah_BuildHudClassic`.
+  - Toni: `Ah_Tones` sceglie il modo (WARNING, MISSILE ALERT, EVADE). Un'onda
+    con armoniche dispari, generata e codificata in ADPCM all'avvio
+    (`Ah_ToneEncode`, 112 campioni in loop), sta nei 64 byte di RAM SPU che la
+    libsd lascia sotto l'area di riverbero (`SD_SPU_ALLOC_TOP` /
+    `SD_PC_TONE_BYTES` in `include/bodyprog/libsd.h`); i registri di pitch e
+    volume suonano i pattern sulla voce 21. Le voci 22 e 23 sono della radio.
+    Mentre suona, la voce è fuori dal driver (`SdPcHoldVoice`, `SD_PC_HELD` nei
+    cicli di ricerca voce di `smf_io.c` / `smf_snd.c`) e resta accesa: gli
+    impulsi sono fatti col volume. Si ferma fuori dal gioco anche dal draw,
+    perché inventario e mappa non chiamano l'update. Se la RAM SPU non c'è,
+    torna il bip del menu.
+  - Harry in wireframe: `Ah_WireBuild` mette in posa `g_WorldGfxWork.harryModel`
+    sul fotogramma 0 dell'animazione base (Harry fermo), ne estrae i lati
+    senza doppioni e li normalizza; `Ah_WireHarry` li disegna al posto di
+    `Ah_Silhouette`. Ricostruito se cambia modello, animazione o mappa.
   - Prima persona: `Ah_FirstPerson` (`g_PcFpsCam` e nessuna scena scriptata),
     `Ah_ViewAngles` legge direzione e beccheggio da `GsWSMATRIX`,
     `Ah_PitchLadder` proietta le direzioni dei gradini con `Ah_ProjectDir`
