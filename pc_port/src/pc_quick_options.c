@@ -153,6 +153,7 @@ static const QoRowDef s_page1[] = {
     { ROW_OPT,   "minimap_require_map",  0, NULL },
     { ROW_OPT,   "crosshair",            0, NULL },
     { ROW_OPT,   "crosshair_size",       0, NULL },
+    { ROW_OPT,   "text_size",            0, NULL },
     { ROW_OPT,   "low_health_glow",      0, NULL },
     { ROW_OPT,   "flight_hud",           0, NULL },
 #if defined(QO_MOBILE)
