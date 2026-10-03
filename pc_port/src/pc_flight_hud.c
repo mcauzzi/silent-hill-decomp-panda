@@ -53,7 +53,13 @@
 
 #include "sh_log.h"
 #include "pc_config.h"
+#if defined(__ANDROID__) || defined(SH_IOS)
 #include "pc_touch.h"
+#define AH_TOUCH_QUICKSAVE() (Pc_Touch_IsDrivingInput() && g_PcConfig.touchQuickSaveLoad)
+#else
+#define Pc_Touch_IsDrivingInput() 0
+#define AH_TOUCH_QUICKSAVE()      0
+#endif
 #include "pc_quick_options.h"
 #include "pc_flight_hud.h"
 
@@ -1845,7 +1851,7 @@ static void Ah_BuildDead(float nowS)
         Ah_UseHi();
         Ah_Text("SIGNAL LOST", 0.0f, 18.0f, 9.0f, 1);
     }
-    Ah_RadioBox((touch && g_PcConfig.touchQuickSaveLoad) ? -172.0f : -232.0f);
+    Ah_RadioBox(AH_TOUCH_QUICKSAVE() ? -172.0f : -232.0f);
 }
 
 static int Ah_Remaining(void)
@@ -2780,7 +2786,7 @@ static void Ah_BuildHud(void)
     s_th = 1.4f;
 
     /* Touch puts Quick Save / Quick Load in the top band when they are on. */
-    radioTop = (touch && g_PcConfig.touchQuickSaveLoad) ? -172.0f : -232.0f;
+    radioTop = AH_TOUCH_QUICKSAVE() ? -172.0f : -232.0f;
     if (fp)
     {
         float vh, vp;

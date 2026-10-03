@@ -253,6 +253,7 @@ typedef struct {
     int crosshair;          /* 1 = draw a center crosshair while aiming in TPS/OTS (config key: crosshair) */
     int crosshairStyle;     /* reticle shape: 0 = cross (+), 1 = dot, 2 = circle, 3 = dashes/gap (config key: crosshair_style) */
     float crosshairSize;    /* reticle scale in percent, 25..125 (config key: crosshair_size) */
+    float textSize;         /* subtitle/message text scale in percent, 100..150 (config key: text_size) */
     int flightHud;             /* 0 = off, 1 = modern, 2 = classic (tapes) fighter-jet style HUD: flight overlay, MISSILE ALERT on enemy lock, flares on L3+R3 (config key: flight_hud) */
     int flightHudSound;        /* 1 = lock warning tones while an enemy tracks / locks Harry (config key: flight_hud_sound) */
     int flightHudOpacity;      /* HUD opacity in percent, 10..100 (config key: flight_hud_opacity) */
