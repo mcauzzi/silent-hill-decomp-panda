@@ -96,7 +96,9 @@ extern void        PcOpt_QuickViewReset(int mode);
 #define QO_MOBILE 1
 #endif
 
-enum { ROW_OPT = 0, ROW_EXTRA, ROW_PAGE, ROW_CLOSE, ROW_CHEAT, ROW_ACTION };
+/* ROW_NAV is the phone's single navigation row: previous page, Close, next
+ * page, side by side. */
+enum { ROW_OPT = 0, ROW_EXTRA, ROW_PAGE, ROW_CLOSE, ROW_CHEAT, ROW_ACTION, ROW_NAV };
 enum { QO_A_VIEWRESET = 0, QO_A_KEYBINDS };
 
 typedef struct
@@ -115,7 +117,7 @@ typedef struct
  * over it, which is what lets Previous and Next sit on the panel together. The
  * desktop's single "Next page" leaves it 0 and keeps the value behaviour, where
  * Left goes back a page and Right goes forward. */
-#define QO_ROW_TAKES_DIR(r) (QO_IS_VALUE_ROW((r)->kind) || \
+#define QO_ROW_TAKES_DIR(r) (QO_IS_VALUE_ROW((r)->kind) || (r)->kind == ROW_NAV || \
                              ((r)->kind == ROW_PAGE && (r)->extra == 0))
 
 static const QoRowDef s_page0[] = {
@@ -422,6 +424,11 @@ static const QoRowDef* qo_section_rows(int page, int* count)
     return s_page0;
 }
 
+#if defined(QO_MOBILE)
+static const char* const s_tabNames[QO_PAGES] = {
+    "Graphics", "HUD & Audio", "View", "Cheats", "Debug", "Controls" };
+#endif
+
 static const char* const s_pageTitles[QO_PAGES] = {
     "QUICK OPTIONS  -  GRAPHICS", "QUICK OPTIONS  -  HUD & AUDIO",
     "QUICK OPTIONS  -  VIEW & ASPECT",
@@ -444,10 +451,11 @@ static const char* const s_pageTitles[QO_PAGES] = {
  * someone added a row to one and not the other. */
 #if defined(QO_MOBILE)
 
-#define QO_M_CONTENT 5   /* settings per page, before the three nav rows */
+/* Six settings, then the one navigation row. Sections are tabs, so paging
+ * only ever turns within the section on screen. */
+#define QO_M_CONTENT 6
 
-static QoRowDef s_mRows[QO_M_CONTENT + 3];
-static char     s_mTitle[96];
+static QoRowDef s_mRows[QO_M_CONTENT + 1];
 
 /* Every section ends with exactly ROW_PAGE then ROW_CLOSE (see the tables and
  * qo_cheat_page), so the settings are everything before the last two. */
@@ -483,6 +491,15 @@ static void qo_locate(int page, int* sec, int* chunk, int* chunks)
     *sec = 0; *chunk = 0; *chunks = 1;
 }
 
+static int qo_sec_first(int sec)
+{
+    int s, acc = 0;
+
+    for (s = 0; s < sec && s < QO_PAGES; s++)
+        acc += qo_sec_chunks(s);
+    return acc;
+}
+
 static int qo_page_count(void)
 {
     int s, t = 0;
@@ -495,7 +512,7 @@ static int qo_page_count(void)
 
 /* Even chunks rather than greedy ones. Filling each page to QO_M_CONTENT and
  * letting the remainder fall into the last one ended Graphics on a page holding
- * a single setting, and a short page moves the navigation rows: the row pitch
+ * a single setting, and a short page moves the navigation row: the row pitch
  * is the list height divided by the row count, so the same spot on the glass
  * belongs to a different row. Sizes now differ by at most one across a section,
  * which keeps a repeated tap on Next landing on Next. */
@@ -520,41 +537,12 @@ static const QoRowDef* qo_page_rows(int page, int* count)
     for (i = 0; i < len && (base + i) < (n - 2); i++)
         s_mRows[k++] = src[base + i];
 
-    /* Both directions, because a phone has no shoulder buttons to page with and
-     * no way back except wrapping the whole way round. */
     memset(&s_mRows[k], 0, sizeof(s_mRows[k]));
-    s_mRows[k].kind  = ROW_PAGE;
-    s_mRows[k].extra = -1;
-    s_mRows[k].label = "Previous page";
-    k++;
-
-    memset(&s_mRows[k], 0, sizeof(s_mRows[k]));
-    s_mRows[k].kind  = ROW_PAGE;
-    s_mRows[k].extra = +1;
-    s_mRows[k].label = "Next page";
-    k++;
-
-    memset(&s_mRows[k], 0, sizeof(s_mRows[k]));
-    s_mRows[k].kind  = ROW_CLOSE;
-    s_mRows[k].label = "Close";
+    s_mRows[k].kind = ROW_NAV;
     k++;
 
     *count = k;
     return s_mRows;
-}
-
-static const char* qo_page_title(int page)
-{
-    int sec, chunk, chunks;
-
-    qo_locate(page, &sec, &chunk, &chunks);
-    if (chunks > 1)
-        snprintf(s_mTitle, sizeof(s_mTitle), "%s  (%d/%d)",
-                 s_pageTitles[sec], chunk + 1, chunks);
-    else
-        snprintf(s_mTitle, sizeof(s_mTitle), "%s", s_pageTitles[sec]);
-
-    return s_mTitle;
 }
 
 #else /* desktop: the sections ARE the pages */
@@ -604,6 +592,12 @@ static int    s_titleW, s_titleH, s_hintW, s_hintH;
  * two atlas slots for the whole panel, not two per row. */
 static GLuint s_texDec, s_texInc;
 static int    s_decW, s_decH, s_incW, s_incH;
+/* Tab labels (the active one carries its page count) and the navigation
+ * row's three labels. */
+static GLuint s_texTab[QO_PAGES];
+static int    s_tabW[QO_PAGES], s_tabH[QO_PAGES];
+static GLuint s_texNav[3];
+static int    s_navW[3], s_navH[3];
 #endif
 static GLuint s_texLabel[QO_MAX_ROWS];
 static int    s_labelW[QO_MAX_ROWS], s_labelH[QO_MAX_ROWS];
@@ -1299,6 +1293,14 @@ static void qo_free_text(void)
 #if defined(QO_MOBILE)
     qo_retire(s_texDec); s_texDec = 0;
     qo_retire(s_texInc); s_texInc = 0;
+    for (i = 0; i < QO_PAGES; i++)
+    {
+        qo_retire(s_texTab[i]); s_texTab[i] = 0;
+    }
+    for (i = 0; i < 3; i++)
+    {
+        qo_retire(s_texNav[i]); s_texNav[i] = 0;
+    }
 #endif
     for (i = 0; i < QO_MAX_ROWS; i++)
     {
@@ -1409,6 +1411,14 @@ static void qo_validate_cache(void)
     qo_validate(&s_texHint,   "hint");
     qo_validate(&s_texWhite,  "white");
     qo_validate(&s_texCursor, "cursor");
+#if defined(QO_MOBILE)
+    qo_validate(&s_texDec, "dec");
+    qo_validate(&s_texInc, "inc");
+    for (i = 0; i < QO_PAGES; i++)
+        qo_validate(&s_texTab[i], "tab");
+    for (i = 0; i < 3; i++)
+        qo_validate(&s_texNav[i], "nav");
+#endif
     for (i = 0; i < QO_MAX_ROWS; i++)
     {
         qo_validate(&s_texLabel[i], "label");
@@ -1599,6 +1609,33 @@ static void qo_set_page(int page)
     if (s_sel < 0)  s_sel = 0;
 }
 
+#if defined(QO_MOBILE)
+/* Turn a page within the section on screen, wrapping inside it. */
+static void qo_page_in_section(int dir)
+{
+    int sec, chunk, chunks;
+
+    qo_locate(s_page, &sec, &chunk, &chunks);
+    if (chunks <= 1)
+        return;
+    qo_beep(Sfx_MenuMove);
+    qo_set_page(qo_sec_first(sec) + (chunk + dir + chunks) % chunks);
+}
+
+static void qo_goto_section(int sec)
+{
+    int cur, chunk, chunks;
+
+    sec = ((sec % QO_PAGES) + QO_PAGES) % QO_PAGES;
+    qo_locate(s_page, &cur, &chunk, &chunks);
+    if (sec == cur && chunk == 0)
+        return;
+    qo_beep(Sfx_MenuMove);
+    s_sel = 0;
+    qo_set_page(qo_sec_first(sec));
+}
+#endif
+
 /* Confirm / click: cheat rows have their own confirm (the Spawn row fires
  * its browsed entry); everything else steps up. */
 static void qo_confirm(const QoRowDef* r);
@@ -1620,6 +1657,9 @@ static void qo_activate(const QoRowDef* r, int dir)
             qo_set_page(s_page + (r->extra != 0 ? r->extra : (dir < 0 ? -1 : +1)));
             break;
         case ROW_CLOSE: qo_beep(Sfx_MenuCancel); Pc_QuickOptions_Close(); break;
+#if defined(QO_MOBILE)
+        case ROW_NAV: qo_page_in_section(dir < 0 ? -1 : +1); break;
+#endif
         case ROW_ACTION: break; /* confirm-only; see the ROW_ACTION comment */
         default: break;
     }
@@ -1844,6 +1884,28 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
     }
 #endif
 
+#if defined(QO_MOBILE)
+    /* The band where the desktop's title bar drags the panel is the tab strip
+     * here: a tap picks the section. */
+    {
+        float tmx, tmy;
+
+        if (Pc_MouseCursor_LeftClicked() && Pc_MouseCursor_ViewportPos(&tmx, &tmy) &&
+            s_geoPanelR > s_geoPanelL)
+        {
+            const float px_ = tmx * s_vpW;
+            const float py_ = (1.0f - tmy) * s_vpH;
+
+            if (px_ >= s_geoPanelL && px_ <= s_geoPanelR && py_ >= s_geoTitleB && py_ <= s_geoTitleT)
+            {
+                int tab = (int)((px_ - s_geoPanelL) / ((s_geoPanelR - s_geoPanelL) / (float)QO_PAGES));
+                if (tab >= QO_PAGES) tab = QO_PAGES - 1;
+                qo_goto_section(tab);
+                return;
+            }
+        }
+    }
+#else
     /* Title-bar drag. Held (not clicked) so it tracks continuously, and it is
      * resolved before the row hit-test below so dragging never also activates
      * whatever the cursor passes over. */
@@ -1877,10 +1939,21 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
             s_dragging = 0;
         }
     }
+#endif
 
+#if defined(QO_MOBILE)
+    /* L1 / R1 (and Q / E, PgUp / PgDn) step through the tabs. */
+    {
+        int sec, chunk, chunks;
+        qo_locate(s_page, &sec, &chunk, &chunks);
+        if (pageNext) qo_goto_section(sec + 1);
+        else if (pagePrev) qo_goto_section(sec - 1);
+    }
+#else
     if (pageNext || pagePrev) qo_beep(Sfx_MenuMove);
     if (pageNext) qo_set_page(s_page + 1);
     if (pagePrev) qo_set_page(s_page - 1);
+#endif
     rows = qo_page_rows(s_page, &nRows);
 
     if (up)   { s_sel = (s_sel + nRows - 1) % nRows; }
@@ -1933,6 +2006,16 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
                     s_ddShown  = 0;
                 }
 #if defined(QO_MOBILE)
+                else if (rows[row].kind == ROW_NAV)
+                {
+                    const float third = (s_geoPanelR - s_geoPanelL) / 3.0f;
+                    if (mpx < s_geoPanelL + third)
+                        qo_page_in_section(-1);
+                    else if (mpx > s_geoPanelR - third)
+                        qo_page_in_section(+1);
+                    else
+                        qo_confirm(&rows[row]);
+                }
                 else if (QO_IS_VALUE_ROW(rows[row].kind))
                 {
                     /* A finger has no right button and no wheel, so the value
@@ -1977,7 +2060,12 @@ void Pc_QuickOptions_Update(int up, int down, int left, int right,
 
 static void qo_confirm(const QoRowDef* r)
 {
-    if (r->kind == ROW_CHEAT)
+    if (r->kind == ROW_NAV)
+    {
+        qo_beep(Sfx_MenuCancel);
+        Pc_QuickOptions_Close();
+    }
+    else if (r->kind == ROW_CHEAT)
         Pc_Cheats_Confirm(r->cpage, r->extra);
     else if (r->kind == ROW_ACTION)
     {
@@ -2176,7 +2264,12 @@ void Pc_QuickOptions_Draw(void)
     panelT = panelB + panelH;
 
     pad      = panelW * 0.05f;
+#if defined(QO_MOBILE)
+    /* The tab strip: a fingertip target, not just a caption. */
+    titleH   = panelH * 0.12f;
+#else
     titleH   = panelH * 0.09f;
+#endif
 #if defined(QO_MOBILE)
     /* No controls footer, so no band to reserve for it -- just enough of a
      * margin that Close does not sit on the panel border. Every term the
@@ -2220,13 +2313,10 @@ void Pc_QuickOptions_Draw(void)
     }
     if (!s_texTitle)
     {
-        /* Mobile pages are CHUNKS of a section, so the page index is not a
-         * section index there and qo_page_title is the only thing that can name
-         * one. Desktop keeps pc-port's dynamic View title, which reports the
-         * camera the page is currently editing. */
+        /* Desktop keeps pc-port's dynamic View title, which reports the camera
+         * the page is currently editing. */
 #if defined(QO_MOBILE)
-        s_texTitle = qo_bake(qo_page_title(s_page), (float)(int)(titleH * 0.46f),
-                             &s_titleW, &s_titleH);
+        /* Nothing: on a phone the tab strip names the section. */
 #else
         const char* title = s_pageTitles[s_page];
         char titleBuf[64];
@@ -2245,6 +2335,37 @@ void Pc_QuickOptions_Draw(void)
 #if defined(QO_MOBILE)
     if (!s_texDec) s_texDec = qo_bake("-", (float)px, &s_decW, &s_decH);
     if (!s_texInc) s_texInc = qo_bake("+", (float)px, &s_incW, &s_incH);
+    {
+        static const char* const navText[3] = { "<  Prev", "Close", "Next  >" };
+        const float tabW = panelW / (float)QO_PAGES;
+        int sec, chunk, chunks, t;
+
+        qo_locate(s_page, &sec, &chunk, &chunks);
+        for (t = 0; t < QO_PAGES; t++)
+        {
+            char  name[48];
+            int   tpx = (int)(titleH * 0.36f);
+
+            if (s_texTab[t])
+                continue;
+            if (t == sec && chunks > 1)
+                snprintf(name, sizeof(name), "%s %d/%d", s_tabNames[t], chunk + 1, chunks);
+            else
+                snprintf(name, sizeof(name), "%s", s_tabNames[t]);
+            if (tpx < 8) tpx = 8;
+            s_texTab[t] = qo_bake(name, (float)tpx, &s_tabW[t], &s_tabH[t]);
+            /* Narrow phones: shrink a label that would spill into its neighbour. */
+            if (s_texTab[t] && s_tabW[t] > tabW - 10.0f && s_tabW[t] > 0)
+            {
+                int fit = (int)((float)tpx * (tabW - 10.0f) / (float)s_tabW[t]);
+                if (fit < 6) fit = 6;
+                s_texTab[t] = qo_bake(name, (float)fit, &s_tabW[t], &s_tabH[t]);
+            }
+        }
+        for (t = 0; t < 3; t++)
+            if (!s_texNav[t])
+                s_texNav[t] = qo_bake(navText[t], (float)px, &s_navW[t], &s_navH[t]);
+    }
 #endif
     /* Controls footer. It used to run off-screen at some panel widths, so bake
      * it once at the natural size and, if it overflows, re-bake once scaled to
@@ -2336,12 +2457,40 @@ void Pc_QuickOptions_Draw(void)
             0.10f, 0.05f, 0.05f, 0.70f * dim);
     qo_quad(s_texWhite, NX(panelL + 2.0f), NY(listT), NX(panelR - 2.0f), NY(listT - 2.0f),
             0.47f, 0.11f, 0.08f, dim);
+#if defined(QO_MOBILE)
+    {
+        const float tabW = panelW / (float)QO_PAGES;
+        int sec, chunk, chunks, t;
+
+        qo_locate(s_page, &sec, &chunk, &chunks);
+        for (t = 0; t < QO_PAGES; t++)
+        {
+            const float l = panelL + tabW * (float)t, r = l + tabW;
+            const float g = (t == sec) ? 1.0f : 0.62f;
+
+            if (t == sec)
+                qo_quad(s_texWhite, NX(l + 3.0f), NY(panelT - 3.0f), NX(r - 3.0f), NY(listT),
+                        0.47f, 0.11f, 0.08f, 0.85f * dim);
+            if (t > 0)
+                qo_quad(s_texWhite, NX(l), NY(panelT - titleH * 0.22f), NX(l + 1.0f), NY(listT + titleH * 0.22f),
+                        1.0f, 0.93f, 0.86f, 0.25f * dim);
+            if (s_texTab[t])
+            {
+                const float tx = l + (tabW - (float)s_tabW[t]) * 0.5f;
+                const float ty = panelT - (titleH - (float)s_tabH[t]) * 0.5f;
+                qo_quad(s_texTab[t], NX(tx), NY(ty), NX(tx + s_tabW[t]), NY(ty - s_tabH[t]),
+                        g, g * 0.93f, g * 0.86f, dim);
+            }
+        }
+    }
+#else
     if (s_texTitle)
     {
         float tx = panelL + (panelW - (float)s_titleW) * 0.5f;
         float ty = panelT - titleH * 0.30f;
         qo_quad(s_texTitle, NX(tx), NY(ty), NX(tx + s_titleW), NY(ty - s_titleH), 1.0f, 0.93f, 0.86f, dim);
     }
+#endif
 
     for (i = 0; i < nRows && i < QO_MAX_ROWS; i++)
     {
@@ -2354,6 +2503,29 @@ void Pc_QuickOptions_Draw(void)
         if (i == s_sel)
             qo_quad(s_texWhite, NX(panelL + 4.0f), NY(rowTop), NX(panelR - 4.0f), NY(rowTop - rowH),
                     0.42f, 0.16f, 0.12f, 0.55f * dim);
+
+#if defined(QO_MOBILE)
+        if (r->kind == ROW_NAV)
+        {
+            const float third = panelW / 3.0f;
+            int sec, chunk, chunks, k;
+
+            qo_locate(s_page, &sec, &chunk, &chunks);
+            for (k = 0; k < 3; k++)
+            {
+                /* Prev and Next go grey on a section that fits one page. */
+                const float g  = (k != 1 && chunks <= 1) ? 0.35f : 0.85f;
+                const float cx = panelL + third * ((float)k + 0.5f);
+
+                if (!s_texNav[k])
+                    continue;
+                tH = (float)s_navH[k]; tY = rowMid + tH * 0.5f;
+                qo_quad(s_texNav[k], NX(cx - s_navW[k] * 0.5f), NY(tY), NX(cx + s_navW[k] * 0.5f), NY(tY - tH),
+                        g * 0.94f, g, g * 1.1f > 1.0f ? 1.0f : g * 1.1f, dim);
+            }
+            continue;
+        }
+#endif
 
         if (!s_texLabel[i])
         {
