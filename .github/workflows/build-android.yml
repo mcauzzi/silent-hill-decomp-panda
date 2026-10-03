@@ -165,3 +165,8 @@ jobs:
             echo "== $off"
             "$A2L" -f -C -i -a -e "$SO" "$off"
           done
+          # Disassembly around the first (faulting) offset, with source lines.
+          OBJDUMP="$(dirname "$A2L")/llvm-objdump"
+          first=$(echo $OFFSETS | cut -d' ' -f1)
+          "$OBJDUMP" -d -l --no-show-raw-insn \
+            --start-address=$(( first - 0x100 )) --stop-address=$(( first + 0x40 )) "$SO"
