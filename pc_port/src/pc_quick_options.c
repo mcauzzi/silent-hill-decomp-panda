@@ -74,10 +74,10 @@ extern void        PcOpt_QuickViewReset(int mode);
 
 #define QO_GARBAGE  48
 #define QO_MAX_ROWS 16
-/* CONTROLS is appended last, so every existing section index -- and the "Next
- * page (X)" label baked into each table -- stays where it was. Its rows differ
- * by platform (s_page5 / s_pageControls). */
-#define QO_PAGES    6
+/* CONTROLS and then FLIGHT are appended last, so every existing section index
+ * -- and the "Next page (X)" label baked into each table -- stays where it
+ * was. Controls rows differ by platform (s_page5 / s_pageControls). */
+#define QO_PAGES    7
 #define QO_DD_MAX     64  /* dropdown entries cached */
 #define QO_DD_VISIBLE 8
 
@@ -155,11 +155,6 @@ static const QoRowDef s_page1[] = {
     { ROW_OPT,   "crosshair_size",       0, NULL },
     { ROW_OPT,   "text_size",            0, NULL },
     { ROW_OPT,   "low_health_glow",      0, NULL },
-    { ROW_OPT,   "flight_hud",           0, NULL },
-#if defined(QO_MOBILE)
-    /* Its Options row lives on the phone-only overflow page. */
-    { ROW_OPT,   "flight_hud_portrait_3d", 0, "3D Radio Portrait" },
-#endif
 /* Not on mobile: it would not do anything. PsyX_SPUAL_SetOutputMode is an
  * empty stub on the software backend and GetOutputMode always answers
  * stereo -- the only surround path for the software SPU is audio_spatial,
@@ -194,7 +189,7 @@ static const QoRowDef s_page5[] = {
     { ROW_OPT,   "invert_controller_y",    0, NULL },
     { ROW_OPT,   "aim_assist",             0, NULL },
     { ROW_EXTRA, NULL, QO_X_DPADMOVE,        "Disable D-pad for Movement" },
-    { ROW_PAGE,  NULL, 0,                   "Next page  (Graphics)" },
+    { ROW_PAGE,  NULL, 0,                   "Next page  (Flight)" },
     { ROW_CLOSE, NULL, 0,                   "Close" },
 };
 #endif
@@ -408,13 +403,27 @@ static const QoRowDef s_pageControls[] = {
      * so the Gamepad style still navigates menus with it. */
     { ROW_EXTRA, NULL, QO_X_DPADMOVE,         "Disable D-pad for Movement" },
     { ROW_OPT,   "touch_quicksave_buttons", 0, "Quick Save/Load Buttons" },
-    { ROW_PAGE,  NULL, 0,                     "Next page  (Graphics)" },
+    { ROW_PAGE,  NULL, 0,                     "Next page  (Flight)" },
     { ROW_CLOSE, NULL, 0,                     "Close" },
 };
 #endif
 
+/* The fighter-jet HUD and its arcade mode, the same rows as the Options
+ * menu's Flight page. */
+static const QoRowDef s_pageFlight[] = {
+    { ROW_OPT,   "flight_hud",             0, NULL },
+    { ROW_OPT,   "flight_gameplay",        0, NULL },
+    { ROW_OPT,   "flight_hud_sound",       0, NULL },
+    { ROW_OPT,   "flight_hud_opacity",     0, NULL },
+    { ROW_OPT,   "flight_hud_callsigns",   0, NULL },
+    { ROW_OPT,   "flight_hud_portrait_3d", 0, "3D Radio Portrait" },
+    { ROW_PAGE,  NULL, 0,                  "Next page  (Graphics)" },
+    { ROW_CLOSE, NULL, 0,                  "Close" },
+};
+
 static const QoRowDef* qo_section_rows(int page, int* count)
 {
+    if (page == 6) { *count = (int)(sizeof(s_pageFlight) / sizeof(s_pageFlight[0])); return s_pageFlight; }
 #if defined(QO_MOBILE)
     if (page == 5) { *count = (int)(sizeof(s_pageControls) / sizeof(s_pageControls[0])); return s_pageControls; }
 #else
@@ -430,14 +439,14 @@ static const QoRowDef* qo_section_rows(int page, int* count)
 
 #if defined(QO_MOBILE)
 static const char* const s_tabNames[QO_PAGES] = {
-    "Graphics", "HUD & Audio", "View", "Cheats", "Debug", "Controls" };
+    "Graphics", "HUD & Audio", "View", "Cheats", "Debug", "Controls", "Flight" };
 #endif
 
 static const char* const s_pageTitles[QO_PAGES] = {
     "QUICK OPTIONS  -  GRAPHICS", "QUICK OPTIONS  -  HUD & AUDIO",
     "QUICK OPTIONS  -  VIEW & ASPECT",
     "QUICK OPTIONS  -  CHEATS",   "QUICK OPTIONS  -  DEBUG",
-    "QUICK OPTIONS  -  CONTROLS" };
+    "QUICK OPTIONS  -  CONTROLS", "QUICK OPTIONS  -  FLIGHT" };
 
 /* ------------------------------------------------------------------ */
 /* Mobile pagination                                                   */
