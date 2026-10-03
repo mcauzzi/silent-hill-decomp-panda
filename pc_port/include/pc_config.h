@@ -259,6 +259,7 @@ typedef struct {
     int flightHudOpacity;      /* HUD opacity in percent, 10..100 (config key: flight_hud_opacity) */
     int flightHudPortrait3d;   /* 1 = radio portrait is the speaker's 3D model, converted from the chara pool and drawn by the HUD (config key: flight_hud_portrait_3d) */
     int flightHudCallsigns;    /* target labels: 0 = monster names, 1 = BANDIT/BOGEY, 2 = TGT-nn by slot (config key: flight_hud_callsigns) */
+    int flightGameplay;        /* 1 = the flight HUD changes the game: flares shield Harry, monsters and Harry fire missiles (config key: flight_gameplay, needs flight_hud) */
     int aimAssist;          /* 1 = OTS/TPS free-aim aim assist (mouse body-coverage + controller auto-aim) (config key: aim_assist) */
     int mouseCursor;        /* 1 = mouse controls cursor puzzles + clickable main menu (config key: mouse_cursor) */
     int touchControls;      /* on-screen touch controls during gameplay -- floating movement stick on the left, drag to look on the right, tap for Action, plus Aim/Fire/Item/Map/Start buttons. e_TouchControlsMode (config key: touch_controls); defaults to Automatic where a touchscreen is the only input */

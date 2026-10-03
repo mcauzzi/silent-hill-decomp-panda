@@ -141,14 +141,16 @@ extern float g_PcFmvVolume;
 
 s32 g_PcOptionsMenu_SelectedEntry     = 0;
 s32 g_PcOptionsMenu_PrevSelectedEntry = 0;
-static s32 g_PcOptionsMenu_Page       = 0; /* 0 = Graphics, 1 = System, 2 = Controls, 3 = Camera, 4 = HUD */
+static s32 g_PcOptionsMenu_Page       = 0; /* 0 = Graphics, 1 = System, 2 = Controls, 3 = Camera, 4 = HUD, then (phones) 5 = More, and Flight last */
 #if defined(SH_IOS) || defined(__ANDROID__)
 /* A sixth page on a phone. Every page there is at its 11-row ceiling (a
  * twelfth row runs Back off the screen), so a new Controls row needed a page
- * to push the overflow onto. PCOPT_M, after HUD. */
-#define PCOPT_PAGE_COUNT 6
+ * to push the overflow onto. PCOPT_M, after HUD; Flight follows it. */
+#define PCOPT_PAGE_COUNT 7
+#define PCOPT_PAGE_FLIGHT 6
 #else
-#define PCOPT_PAGE_COUNT 5
+#define PCOPT_PAGE_COUNT 6
+#define PCOPT_PAGE_FLIGHT 5
 #endif
 
 /* Mouse hover moves the selection WITHOUT resetting g_Options_SelectionHighlightTimer:
@@ -247,11 +249,12 @@ static const char* const LBL_WHZ[]    = { "30_Hz", "60_Hz" };
 static const int VAL_FHUD[]   = { 0, 1, 2 };
 static const char* const LBL_FHUD[]   = { "Off", "Modern", "Classic" };
 #if defined(SH_IOS) || defined(__ANDROID__)
-static const int VAL_FHNAME[] = { 0, 1, 2 };
-static const char* const LBL_FHNAME[] = { "Names", "Callsigns", "Numbered" };
 static const int VAL_GYRO[]   = { 0, 1, 2 };
 static const char* const LBL_GYRO[]   = { "Off", "Aiming", "Always" };
 #endif
+static const int VAL_FHOP[]   = { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 };
+static const int VAL_FCALL[]  = { 0, 1, 2 };
+static const char* const LBL_FCALL[]  = { "Names", "Callsigns", "Numbered" };
 
 static const int RES_W[] = { 640, 1280, 1366, 1600, 1920, 2560, 3840 };
 static const int RES_H[] = { 480,  720,  768,  900, 1080, 1440, 2160 };
@@ -390,8 +393,6 @@ static const s_PcOpt PCOPT_C[] = {
     /* A graphics option parked on the Controls page purely for room: 11 rows
      * is the ceiling on every page. On a phone it lives on the sixth page. */
     { "Bullet_Decals",     &g_PcConfig.bulletDecals,      "bullet_decals",          VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
-    /* HUD page is at the 11-row ceiling. */
-    { "Flight_HUD",        &g_PcConfig.flightHud,          "flight_hud",            VAL_FHUD, 3, LBL_FHUD, NULL, 1, PCK_INT },
 #endif
     { "Prev_Page",         NULL,                          NULL,                     NULL,      0, NULL,      NULL, 0, PCK_PREV },
     { "Next_Page",         NULL,                          NULL,                     NULL,      0, NULL,      NULL, 0, PCK_NEXT },
@@ -445,10 +446,7 @@ static const s_PcOpt PCOPT_H[] = {
     { "Text_Size",         NULL, "text_size",              NULL, 0, NULL, NULL, 1, PCK_SLIDER, &g_PcConfig.textSize,      NULL, 100.0f, 150.0f, 5.0f },
 #endif
     { "Prev_Page",         NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_PREV },
-#if defined(SH_IOS) || defined(__ANDROID__)
-    /* Not the last page on a phone: PCOPT_M follows. */
     { "Next_Page",         NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_NEXT },
-#endif
     { "Back",              NULL,                           NULL,                    NULL,      0, NULL,      NULL, 0, PCK_BACK },
 };
 
@@ -456,17 +454,14 @@ static const s_PcOpt PCOPT_H[] = {
 /* Page 6, phones only: the overflow. Each of these was parked on a page with
  * a spare row until the rows ran out -- Bullet_Decals on Controls, the
  * RetroAchievements login on HUD. The pages are unlabelled in game, so
- * grouping is secondary to every page fitting. */
+ * grouping is secondary to every page fitting. The flight HUD rows live on the
+ * Flight page after it. */
 static const s_PcOpt PCOPT_M[] = {
     /* Which controller drives the game when more than one is connected. An
      * Android TV remote enumerates as a controller, and with first-come
      * assignment it could take the slots ahead of a Bluetooth pad. */
     { "Controller",        NULL,                          "preferred_controller", NULL,      0, NULL,       NULL, 1, PCK_PAD },
     { "Bullet_Decals",     &g_PcConfig.bulletDecals,      "bullet_decals",       VAL_ONOFF,  2, LBL_ONOFF,  NULL, 1, PCK_INT },
-    { "Flight_HUD",        &g_PcConfig.flightHud,          "flight_hud",            VAL_FHUD, 3, LBL_FHUD, NULL, 1, PCK_INT },
-    /* Config-only on desktop: the HUD page there is at the row ceiling. */
-    { "Target_Labels",     &g_PcConfig.flightHudCallsigns, "flight_hud_callsigns",  VAL_FHNAME, 3, LBL_FHNAME, NULL, 1, PCK_INT },
-    { "Portrait_3D",       &g_PcConfig.flightHudPortrait3d, "flight_hud_portrait_3d", VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
     /* Config-only on desktop, where every page is full; there it is a pad's
      * gyroscope, here the phone's own. */
     { "Gyro_Aim",          &g_PcConfig.gyroAim,           "gyro_aim",            VAL_GYRO,   3, LBL_GYRO,   NULL, 1, PCK_INT },
@@ -476,9 +471,22 @@ static const s_PcOpt PCOPT_M[] = {
      * launcher owns the account and the game just consumes its token. */
     { "Achievements",      NULL,                          NULL,                  NULL,       0, NULL,       NULL, 0, PCK_RALOGIN },
     { "Prev_Page",         NULL,                          NULL,                  NULL,       0, NULL,       NULL, 0, PCK_PREV },
+    { "Next_Page",         NULL,                          NULL,                  NULL,       0, NULL,       NULL, 0, PCK_NEXT },
     { "Back",              NULL,                          NULL,                  NULL,       0, NULL,       NULL, 0, PCK_BACK },
 };
 #endif
+
+/* Last page (Flight): the fighter-jet HUD and its arcade mode. */
+static const s_PcOpt PCOPT_F[] = {
+    { "Flight_HUD",        &g_PcConfig.flightHud,          "flight_hud",            VAL_FHUD,  3,  LBL_FHUD,  NULL, 1, PCK_INT },
+    { "Arcade_Mode",       &g_PcConfig.flightGameplay,     "flight_gameplay",       VAL_ONOFF, 2,  LBL_ONOFF, NULL, 1, PCK_INT },
+    { "Warning_Tones",     &g_PcConfig.flightHudSound,     "flight_hud_sound",      VAL_ONOFF, 2,  LBL_ONOFF, NULL, 1, PCK_INT },
+    { "HUD_Opacity",       &g_PcConfig.flightHudOpacity,   "flight_hud_opacity",    VAL_FHOP,  10, NULL,      NULL, 1, PCK_INT },
+    { "Target_Labels",     &g_PcConfig.flightHudCallsigns, "flight_hud_callsigns",  VAL_FCALL, 3,  LBL_FCALL, NULL, 1, PCK_INT },
+    { "3D_Radio_Portrait", &g_PcConfig.flightHudPortrait3d, "flight_hud_portrait_3d", VAL_ONOFF, 2, LBL_ONOFF, NULL, 1, PCK_INT },
+    { "Prev_Page",         NULL,                           NULL,                    NULL,      0,  NULL,      NULL, 0, PCK_PREV },
+    { "Back",              NULL,                           NULL,                    NULL,      0,  NULL,      NULL, 0, PCK_BACK },
+};
 
 static void Options_PcOptionsMenu_EntryStringsDraw(void);
 static void Options_PcOptionsMenu_ConfigDraw(void);
@@ -519,6 +527,7 @@ const s_PcOpt* PcOpt_PageByIndex(int page, int* count)
 #if defined(SH_IOS) || defined(__ANDROID__)
     if (page == 5) { *count = (int)(sizeof(PCOPT_M) / sizeof(PCOPT_M[0])); return PCOPT_M; }
 #endif
+    if (page == PCOPT_PAGE_FLIGHT) { *count = (int)(sizeof(PCOPT_F) / sizeof(PCOPT_F[0])); return PCOPT_F; }
     *count = (int)(sizeof(PCOPT_H) / sizeof(PCOPT_H[0]));
     return PCOPT_H;
 }
@@ -532,6 +541,7 @@ static const s_PcOpt* PcOpt_Page(int* count)
 #if defined(SH_IOS) || defined(__ANDROID__)
     if (g_PcOptionsMenu_Page == 5) { *count = (int)(sizeof(PCOPT_M) / sizeof(PCOPT_M[0])); return PCOPT_M; }
 #endif
+    if (g_PcOptionsMenu_Page == PCOPT_PAGE_FLIGHT) { *count = (int)(sizeof(PCOPT_F) / sizeof(PCOPT_F[0])); return PCOPT_F; }
     *count = (int)(sizeof(PCOPT_H) / sizeof(PCOPT_H[0]));
     return PCOPT_H;
 }
@@ -1761,12 +1771,12 @@ void Options_PcOptionsMenu_Control(void)
         if (g_Controller0->clickedBtnFlags & g_GameWorkPtr->config.controllerConfig.enter) {
             if (sel->kind == PCK_NEXT) {
                 Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
-                g_PcOptionsMenu_Page++; /* Graphics -> System -> Controls -> Camera -> HUD */
+                g_PcOptionsMenu_Page++; /* Graphics -> System -> Controls -> Camera -> HUD -> Flight */
                 g_PcOptionsMenu_SelectedEntry = 0;
                 g_Options_SelectionHighlightTimer = 0;
             } else if (sel->kind == PCK_PREV) {
                 Sd_PlaySfx(Sfx_MenuConfirm, 0, 64);
-                g_PcOptionsMenu_Page--; /* HUD -> Camera -> Controls -> System -> Graphics */
+                g_PcOptionsMenu_Page--; /* Flight -> HUD -> Camera -> Controls -> System -> Graphics */
                 g_PcOptionsMenu_SelectedEntry = 0;
                 g_Options_SelectionHighlightTimer = 0;
 #if defined(SH_IOS)
