@@ -124,6 +124,14 @@ s_PcConfig g_PcConfig = {
     .touchStyle          = TouchStyle_Context,
     .touchQuickSaveLoad  = 0,
     .touchLookSensitivity = 1.0f,
+#if defined(SH_IOS) || defined(__ANDROID__)
+    /* A phone has a gyroscope and a thumb-drag is coarse; on desktop it would
+     * suddenly wake the gyro of a DualShock or DualSense, so it stays opt-in. */
+    .gyroAim         = 1,
+#else
+    .gyroAim         = 0,
+#endif
+    .gyroSensitivity = 2.0f,
     .renderScale         = 1.0f,
     .lowEndMode          = 0,
     .oneButtonCombat      = 0, /* off: Aim holds, a separate Fire button shoots */
@@ -1123,6 +1131,22 @@ void PcConfig_Load(const char* path)
             if (v < 0.1f) v = 0.1f;
             if (v > 4.0f) v = 4.0f;
             g_PcConfig.touchLookSensitivity = v;
+        }
+        else if (strcmp(key, "gyro_aim") == 0)
+        {
+            int v = atoi(value);
+            g_PcConfig.gyroAim = (v < 0 || v > 2) ? 0 : v;
+        }
+        else if (strcmp(key, "gyro_sensitivity") == 0)
+        {
+            float v = (float)atof(value);
+            if (v < 0.25f) v = 0.25f;
+            if (v > 6.0f)  v = 6.0f;
+            g_PcConfig.gyroSensitivity = v;
+        }
+        else if (strcmp(key, "gyro_invert_y") == 0)
+        {
+            g_PcConfig.gyroInvertY = (atoi(value) != 0);
         }
         else if (strcmp(key, "aim_assist") == 0)
         {

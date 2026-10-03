@@ -394,6 +394,9 @@ static const QoRowDef s_pageControls[] = {
     { ROW_OPT,   "control_2d",             0, NULL },  /* screen-relative movement */
     { ROW_OPT,   "touch_controls",         0, NULL },  /* Automatic / On / Off */
     { ROW_OPT,   "touch_look_sensitivity", 0, NULL },
+    { ROW_OPT,   "gyro_aim",               0, NULL },
+    { ROW_OPT,   "gyro_sensitivity",       0, NULL },
+    { ROW_OPT,   "gyro_invert_y",          0, NULL },
     { ROW_OPT,   "one_button_combat",      0, NULL },
     /* The pad rows the Options menu's Controls page carries on a phone, for
      * anyone who has paired a controller. */
