@@ -113,8 +113,8 @@ static s_TouchButton s_Buttons[TB_COUNT] = {
      * one gap in the right-hand cluster a thumb reaches without leaving it. */
     [TB_FLARE] = { 0.760f, 0.470f, 0.058f, 0 },
     /* Arcade mode's machine gun. Placed at run time with Fire
-     * (Tc_PlaceFireButtons): the two split Fire's spot between them. */
-    [TB_GUN] = { 0.095f, 0.825f, 0.060f, 0 },
+     * (Tc_PlaceFireButtons): the two split Aim's spot between them. */
+    [TB_GUN] = { 0.905f, 0.825f, 0.060f, 0 },
 };
 
 typedef struct
@@ -823,6 +823,8 @@ static int Tc_HitButton(float x, float y, float aspect)
             continue;
         if (i == TB_GUN && !Pc_FlightArcade_Active())
             continue;
+        if (i == TB_AIM && Pc_FlightArcade_Active())
+            continue;
 
         float dx = (x - s_Buttons[i].cx) * aspect;
         float dy = (y - s_Buttons[i].cy);
@@ -925,17 +927,20 @@ static int Tc_AltCam(void)
 
 /* Menu's centre plus a fixed gap in HEIGHT units, so the pair keeps its
  * spacing at any aspect. */
-/* Arcade mode splits Fire's spot in two, missile (M) above gun (G); the
- * rest of the time Fire has it to itself. */
+/* Arcade mode has no use for Aim, so missile (M) above gun (G) take its
+ * spot under the right thumb; the rest of the time Fire mirrors Aim on the
+ * left. */
 static void Tc_PlaceFireButtons(void)
 {
     if (Pc_FlightArcade_Active())
     {
+        s_Buttons[TB_FIRE].cx = 0.905f;
         s_Buttons[TB_FIRE].cy = 0.700f;
         s_Buttons[TB_FIRE].r  = 0.060f;
     }
     else
     {
+        s_Buttons[TB_FIRE].cx = 0.095f;
         s_Buttons[TB_FIRE].cy = 0.760f;
         s_Buttons[TB_FIRE].r  = 0.105f;
     }
@@ -1540,8 +1545,6 @@ void Pc_Touch_Update(void)
                 Pc_FlightArcade_MissileRequest();
             s_mslWas = mslNow;
             Pc_FlightArcade_GunTouch((mode == TC_MODE_GAMEPLAY) && s_Buttons[TB_GUN].holdFrames > 0);
-            if (s_Buttons[TB_AIM].holdFrames > 0 && g_PcConfig.oneButtonCombat)
-                Tc_PressAction(&s_PadWord, cfg->action);
         }
         else if (s_Buttons[TB_AIM].holdFrames > 0 &&
                  (g_PcConfig.oneButtonCombat || s_Buttons[TB_FIRE].holdFrames > 0))
@@ -2239,6 +2242,9 @@ void Pc_Touch_Draw(void)
             continue;
 
         if (i == TB_GUN && (mode != TC_MODE_GAMEPLAY || !Pc_FlightArcade_Active()))
+            continue;
+
+        if (i == TB_AIM && mode == TC_MODE_GAMEPLAY && Pc_FlightArcade_Active())
             continue;
 
         /* Fire appears with the gun and goes away with it, except in arcade
