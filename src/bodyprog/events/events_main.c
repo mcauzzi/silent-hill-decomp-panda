@@ -259,6 +259,27 @@ void Event_Update(bool disableButtonEvents) // 0x800373CC
     g_MapEventParam    = 0;
 }
 
+#ifdef SH_PC_PORT
+/* Attract demos replay stock-game input, so they keep PSX facing whatever the
+ * camera style. */
+static bool Event_AltCamFacing(void)
+{
+    extern int g_DebugThirdPersonCam;
+
+    return g_DebugThirdPersonCam && !(g_SysWork.sysFlags & SysFlag_DemoActive);
+}
+
+/* Alternate cameras steer Harry with the view, but in First Person he keeps his
+ * body put while looking around idle, so the yaw a player is "facing" is the
+ * view's. Classic keeps the body yaw, as on PSX. */
+static q3_12 Event_FacingYaw(void)
+{
+    extern s32 g_TpsCamYaw;
+
+    return Event_AltCamFacing() ? (q3_12)g_TpsCamYaw : g_SysWork.playerWork.player.rotation.vy;
+}
+#endif
+
 bool Event_CollideFacingCheck(s_MapPoint2d* mapPoint) // 0x800378D4
 {
     q19_12     deltaX;
@@ -285,7 +306,11 @@ bool Event_CollideFacingCheck(s_MapPoint2d* mapPoint) // 0x800378D4
 
     if (g_TickCount > D_800A9A20)
     {
+#ifdef SH_PC_PORT
+        rotY       = Event_FacingYaw();
+#else
         rotY       = g_SysWork.playerWork.player.rotation.vy;
+#endif
         D_800A9A24 = g_SysWork.playerWork.player.position.vx - (Math_Sin(rotY) >> 3); // `/ 8`.
         D_800A9A28 = g_SysWork.playerWork.player.position.vz - (Math_Cos(rotY) >> 3); // `/ 8`.
         D_800A9A20 = g_TickCount;
@@ -309,13 +334,26 @@ bool Event_CollideFacingCheck(s_MapPoint2d* mapPoint) // 0x800378D4
     }
     }
 
+#ifdef SH_PC_PORT
+    /* The alternate cameras aim from behind or over the shoulder, so what sits
+     * under the crosshair is off Harry's own forward line by the shoulder
+     * offset, and there is no turning on the spot to line up 30 degrees. */
+    const q19_12 cone = Event_AltCamFacing() ? Q12_ANGLE(50.0f) : Q12_ANGLE(30.0f);
+
+    deltaRotY = Event_FacingYaw() - ratan2(deltaX, deltaZ);
+#else
     deltaRotY = g_SysWork.playerWork.player.rotation.vy - ratan2(deltaX, deltaZ);
+#endif
     if (deltaRotY >= Q12_ANGLE(180.0f))
     {
         deltaRotY -= Q12_ANGLE(360.0f);
     }
 
+#ifdef SH_PC_PORT
+    if (cone < ABS(deltaRotY))
+#else
     if (Q12_ANGLE(30.0f) < ABS(deltaRotY))
+#endif
     {
         return false;
     }
@@ -341,7 +379,13 @@ bool Event_CollideObbFacingCheck(s_MapPoint2d* mapPoint) // 0x80037A4C
     s32    scaledSinPlayerRotY;
     s32    scaledCosRotY;
 
+#ifdef SH_PC_PORT
+    const q3_12 facingYaw = Event_FacingYaw();
+
+    halfSinRotY   = Math_Sin(facingYaw) >> 1; // `/ 2`.
+#else
     halfSinRotY   = Math_Sin(g_SysWork.playerWork.player.rotation.vy) >> 1; // `/ 2`.
+#endif
     scaledCosRotY = -Math_Cos(Q12_ANGLE_FROM_Q8(mapPoint->triggerParam0)) * mapPoint->triggerParam1;
 
     clampedHalfCosPlayerRotY = halfSinRotY;
@@ -366,7 +410,11 @@ bool Event_CollideObbFacingCheck(s_MapPoint2d* mapPoint) // 0x80037A4C
     {
         if (MIN(halfSinRotY, 0) <= MAX(temp_s2, temp_s4))
         {
+#ifdef SH_PC_PORT
+            halfCosPlayerRotY   = Math_Cos(facingYaw) >> 1; // `/ 2`.
+#else
             halfCosPlayerRotY   = Math_Cos(g_SysWork.playerWork.player.rotation.vy) >> 1; // `/ 2`.
+#endif
             scaledSinPlayerRotY = Math_Sin(Q12_ANGLE_FROM_Q8(mapPoint->triggerParam0)) *
                                   mapPoint->triggerParam1;
 
