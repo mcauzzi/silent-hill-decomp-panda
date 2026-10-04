@@ -78,6 +78,8 @@ void        Ios_EnsureModFolders(void);
 #include <PsyX/PsyX_backend.h>
 #include <PsyX/common/glad.h>
 
+#include "pc_touch.h"
+
 /* Null device differs by platform: NUL on Windows, /dev/null on POSIX. */
 #ifdef _WIN32
 #define SH_NULL_DEVICE "NUL"
@@ -1543,6 +1545,12 @@ int main(int argc, char* argv[])
      * as their ADDED events arrive, and that has to see the preference. */
     snprintf(g_cfg_preferredController, sizeof(g_cfg_preferredController), "%s",
              g_PcConfig.preferredController);
+
+    /* The pad read pulls the touch controls through these from the first read. */
+    g_PsyX_TouchHooks.update         = Pc_Touch_Update;
+    g_PsyX_TouchHooks.noteOtherInput = Pc_Touch_NoteOtherInput;
+    g_PsyX_TouchHooks.active         = Pc_Touch_Active;
+    g_PsyX_TouchHooks.getPad         = Pc_Touch_GetPad;
 
     /* Initialize PsyCross (creates SDL2 window + OpenGL context) */
     SH_LOG("Initializing PsyCross (SDL2 + OpenGL)...");
