@@ -159,12 +159,12 @@ Spenta di default: senza, l'HUD è solo scena. Accesa (e con l'HUD attivo):
     A e il clic sinistro sono la mitragliatrice.
   - La rimappatura vale solo in gioco (non in menu, inventario, mappa,
     messaggi) e non tocca la configurazione dei tasti salvata.
-  - **Touch** (stile Context): il posto del pulsante di sparo si divide in
-    due pulsanti più piccoli, sempre visibili in gioco: **M** sopra lancia il
-    missile sul bersaglio agganciato (senza LOCK ON un bip d'errore), **G**
-    sotto è la mitragliatrice, tenuto per la raffica. Con il touch la rimappatura X/R1 non si applica:
-    i tocchi per interagire restano l'azione. Per sparare con l'arma mirando
-    serve One_Button_Fire. Nello stile Gamepad Cerchio fa come sul pad. Senza LOCK ON Cerchio resta
+  - **Touch** (stile Context): il grande pulsante Mira sparisce e il suo
+    posto si divide in due pulsanti più piccoli, sempre visibili in gioco:
+    **M** sopra lancia il missile sul bersaglio agganciato (senza LOCK ON un
+    bip d'errore), **G** sotto è la mitragliatrice, tenuto per la raffica. Con
+    il touch la rimappatura X/R1 non si applica: i tocchi per interagire
+    restano l'azione. Per mirare con l'arma resta il doppio tocco a sinistra. Nello stile Gamepad Cerchio fa come sul pad. Senza LOCK ON Cerchio resta
   la torcia. 2 missili, uno torna ogni 12 s; `MSL` accanto a `FLR`,
   `NO MISSILES` a stock vuoto. Accanto a MSL due icone di missile: piene se
   pronte, vuote se lanciate, quella in ricarica si riempie man mano. Colpisce come due colpi di fucile.
